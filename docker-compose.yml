@@ -1,0 +1,13 @@
+version: "3.9"
+services:
+  api:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app
+    environment:
+      - SECRET_KEY=change_me_to_a_long_random_string
+      - DATABASE_URL=sqlite:///./compliancebinder.db
+      - UPLOAD_DIR=./uploads
+      - ALLOWED_ORIGINS=*
