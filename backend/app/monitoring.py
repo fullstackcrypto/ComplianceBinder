@@ -164,7 +164,7 @@ def get_metrics(session: Session = Depends(get_session)) -> MetricsResponse:
     tasks_overdue = session.exec(
         select(func.count()).select_from(Task).where(
             Task.status == "open",
-            Task.due_date != None,  # noqa: E711
+            Task.due_date.is_not(None),
             Task.due_date < today
         )
     ).first() or 0

@@ -7,14 +7,12 @@ This module provides:
 - Request/response logging
 """
 
-from __future__ import annotations
-
 import logging
 import sys
 import time
 import uuid
 from contextvars import ContextVar
-from typing import Callable
+from typing import Callable, List, Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -101,7 +99,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     - Request duration in milliseconds
     """
     
-    def __init__(self, app, exclude_paths: list[str] | None = None):
+    def __init__(self, app, exclude_paths: Optional[List[str]] = None):
         super().__init__(app)
         self.exclude_paths = exclude_paths or ["/health", "/metrics", "/status"]
         self.logger = logging.getLogger("compliancebinder.requests")
@@ -157,7 +155,7 @@ def log_auth_event(event_type: str, email: str, success: bool, details: str = ""
 def log_crud_event(
     operation: str,
     resource_type: str,
-    resource_id: int | None = None,
+    resource_id: Optional[int] = None,
     user_email: str = "",
     details: str = ""
 ) -> None:
