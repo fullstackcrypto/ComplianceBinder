@@ -195,12 +195,14 @@ function renderTasks() {
     .sort((a,b) => (a.due_date||'9999').localeCompare(b.due_date||'9999'))
     .forEach(t => {
       const li = document.createElement('li');
+      if (t.is_overdue) li.classList.add('overdue');
       const due = t.due_date ? `Due: ${t.due_date}` : '';
       const done = t.status === 'done';
+      const overdueIcon = t.is_overdue ? '⚠️ ' : '';
       li.innerHTML = `
         <div class="row between" style="margin:0; gap: 8px;">
           <div>
-            <strong>${done ? '✅' : '⬜'} ${escapeHtml(t.title)}</strong>
+            <strong>${done ? '✅' : '⬜'} ${overdueIcon}${escapeHtml(t.title)}</strong>
             <span class="meta">${escapeHtml(due)}</span>
           </div>
           ${done ? '' : `<button class="secondary" data-done="${t.id}">Mark done</button>`}
@@ -340,18 +342,21 @@ async function copyReportHtml() {
 function updateStatsAndNext() {
   const open = allTasks.filter(t => t.status !== 'done').length;
   const done = allTasks.filter(t => t.status === 'done').length;
+  const overdue = allTasks.filter(t => t.is_overdue).length;
   const docs = allDocs.length;
 
   const s = els.stats();
   s.innerHTML = `
     <div class="stat"><div class="k">Open tasks</div><div class="v">${open}</div></div>
     <div class="stat"><div class="k">Completed</div><div class="v">${done}</div></div>
+    <div class="stat ${overdue > 0 ? 'stat-warning' : ''}"><div class="k">Overdue</div><div class="v">${overdue}</div></div>
     <div class="stat"><div class="k">Documents</div><div class="v">${docs}</div></div>
   `;
 
   const n = els.nextStep();
   if (!n) return;
-  if (open > 0) n.textContent = 'Finish your next open task (keeps you inspection‑ready).';
+  if (overdue > 0) n.textContent = `⚠️ You have ${overdue} overdue task(s). Complete them to stay inspection‑ready.`;
+  else if (open > 0) n.textContent = 'Finish your next open task (keeps you inspection‑ready).';
   else if (docs === 0) n.textContent = 'Upload at least one supporting document (license, inspection, photo).';
   else n.textContent = 'Open the report and print/save it as your inspection binder.';
 }

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -17,7 +17,18 @@ from .db import init_db, get_session
 from .models import User, Binder, Task, Document
 from .schemas import Token, UserCreate, BinderCreate, BinderOut, TaskCreate, TaskOut, DocumentOut
 from .security import hash_password, verify_password, create_access_token, decode_token
+from .monitoring import router as monitoring_router
+from .logging_config import (
+    configure_logging,
+    RequestIdMiddleware,
+    RequestLoggingMiddleware,
+    log_auth_event,
+    log_crud_event,
+)
 
+
+# Configure structured logging
+logger = configure_logging()
 
 app = FastAPI(title="ComplianceBinder", version="0.1.0")
 
@@ -29,6 +40,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add request ID middleware for traceability
+app.add_middleware(RequestIdMiddleware)
+
+# Add request logging middleware
+app.add_middleware(RequestLoggingMiddleware)
+
+# Include monitoring endpoints
+app.include_router(monitoring_router)
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
 
@@ -36,6 +56,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 def _startup() -> None:
     init_db()
     Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+    logger.info("ComplianceBinder started successfully")
 
 
 def get_current_user(
@@ -63,11 +84,13 @@ def get_current_user(
 def register(user_in: UserCreate, session: Session = Depends(get_session)) -> dict:
     existing = session.exec(select(User).where(User.email == user_in.email)).first()
     if existing:
+        log_auth_event("register", user_in.email, success=False, details="Email already registered")
         raise HTTPException(status_code=400, detail="Email already registered")
 
     user = User(email=user_in.email, password_hash=hash_password(user_in.password))
     session.add(user)
     session.commit()
+    log_auth_event("register", user_in.email, success=True)
     return {"ok": True}
 
 
@@ -78,8 +101,10 @@ def login(
 ) -> Token:
     user = session.exec(select(User).where(User.email == form.username)).first()
     if not user or not verify_password(form.password, user.password_hash):
+        log_auth_event("login", form.username, success=False, details="Bad credentials")
         raise HTTPException(status_code=401, detail="Bad credentials")
     token = create_access_token(subject=user.email)
+    log_auth_event("login", user.email, success=True)
     return Token(access_token=token)
 
 
@@ -105,6 +130,7 @@ def create_binder(
     session.add(binder)
     session.commit()
     session.refresh(binder)
+    log_crud_event("create", "binder", binder.id, me.email, f"name={binder.name}")
     return BinderOut(id=binder.id, name=binder.name, industry=binder.industry, created_at=binder.created_at)
 
 
@@ -126,6 +152,7 @@ def list_tasks(
 ) -> list[TaskOut]:
     _ = _get_binder_or_404(binder_id, me, session)
     tasks = session.exec(select(Task).where(Task.binder_id == binder_id).order_by(Task.created_at.desc())).all()
+    today = date.today()
     return [
         TaskOut(
             id=t.id,
@@ -134,6 +161,7 @@ def list_tasks(
             status=t.status,
             due_date=t.due_date,
             created_at=t.created_at,
+            is_overdue=t.status != "done" and t.due_date is not None and t.due_date < today,
         )
         for t in tasks
     ]
@@ -156,6 +184,7 @@ def create_task(
     session.add(task)
     session.commit()
     session.refresh(task)
+    log_crud_event("create", "task", task.id, me.email, f"title={task.title}")
     return TaskOut(
         id=task.id,
         title=task.title,
@@ -179,8 +208,10 @@ def mark_done(
     if not binder or binder.owner_id != me.id:
         raise HTTPException(status_code=404, detail="Task not found")
     task.status = "done"
+    task.updated_at = datetime.utcnow()
     session.add(task)
     session.commit()
+    log_crud_event("update", "task", task.id, me.email, "status=done")
     return {"ok": True}
 
 
@@ -225,6 +256,8 @@ def upload_document(
     )
     session.add(doc)
     session.commit()
+    session.refresh(doc)
+    log_crud_event("create", "document", doc.id, me.email, f"name={file.filename}")
     return {"ok": True}
 
 

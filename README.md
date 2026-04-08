@@ -65,3 +65,44 @@ ComplianceBinder/
 - PDF export button
 - Multi-user sharing (read-only inspectors)
 
+## Monitoring & Self-Monitoring
+
+ComplianceBinder includes built-in monitoring endpoints for observability:
+
+### Health Check
+```
+GET /health
+```
+Returns service health status including database and storage connectivity.
+
+### Metrics
+```
+GET /metrics
+```
+Returns system statistics:
+- Total users, binders, tasks, and documents
+- Task status breakdown (open, done, overdue)
+- Storage usage in bytes
+
+### System Status
+```
+GET /status
+```
+Returns comprehensive system information:
+- Application version and Python version
+- Uptime in seconds
+- Database and storage status
+- Storage path and usage
+
+### Structured Logging
+All operations are logged with:
+- **Request ID tracking** - Each request gets a unique ID for traceability
+- **Auth event logging** - Login/register events are logged for security auditing
+- **CRUD audit logging** - All create/update operations are logged with user context
+
+### Overdue Task Tracking
+Tasks with past due dates are automatically flagged as overdue:
+- The `/metrics` endpoint includes `tasks_overdue` count
+- The frontend displays overdue tasks with visual indicators
+- Overdue count shows in the binder stats dashboard
+

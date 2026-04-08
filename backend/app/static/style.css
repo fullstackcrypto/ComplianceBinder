@@ -179,6 +179,20 @@ button.secondary {
   box-shadow: 0 0 0 4px rgba(138, 255, 193, 0.10);
 }
 
+.list li.overdue {
+  border-color: rgba(255, 90, 106, 0.55);
+  background: rgba(255, 90, 106, 0.08);
+}
+
+.stat.stat-warning {
+  border-color: rgba(255, 90, 106, 0.55);
+  background: rgba(255, 90, 106, 0.12);
+}
+
+.stat.stat-warning .v {
+  color: var(--danger);
+}
+
 .binderHeader {
   display: flex;
   justify-content: space-between;
@@ -188,9 +202,9 @@ button.secondary {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
-  min-width: 360px;
+  min-width: 400px;
 }
 
 .stat {

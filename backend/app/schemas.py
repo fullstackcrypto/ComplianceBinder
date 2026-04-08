@@ -39,6 +39,7 @@ class TaskOut(BaseModel):
     status: str
     due_date: Optional[date]
     created_at: datetime
+    is_overdue: bool = False
 
 
 class DocumentOut(BaseModel):
