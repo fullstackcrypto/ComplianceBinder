@@ -1,55 +1,94 @@
 from __future__ import annotations
 
+import html
 import os
+import re
 import secrets
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, status, UploadFile, File, Form
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
 
 from .config import settings
-from .db import init_db, get_session
-from .models import User, Binder, Task, Document
-from .schemas import Token, UserCreate, BinderCreate, BinderOut, TaskCreate, TaskOut, DocumentOut
-from .security import hash_password, verify_password, create_access_token, decode_token
-from .monitoring import router as monitoring_router
+from .db import get_session, init_db
 from .logging_config import (
-    configure_logging,
     RequestIdMiddleware,
     RequestLoggingMiddleware,
+    configure_logging,
     log_auth_event,
     log_crud_event,
 )
+from .models import Binder, Document, Task, User
+from .monitoring import router as monitoring_router
+from .schemas import BinderCreate, BinderOut, DocumentOut, TaskCreate, TaskOut, Token, UserCreate
+from .security import create_access_token, decode_token, hash_password, verify_password
 
 
-# Configure structured logging
 logger = configure_logging()
 
 app = FastAPI(title="ComplianceBinder", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.allowed_origins] if settings.allowed_origins != "*" else ["*"],
+    allow_origins=settings.parsed_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Add request ID middleware for traceability
 app.add_middleware(RequestIdMiddleware)
-
-# Add request logging middleware
 app.add_middleware(RequestLoggingMiddleware)
-
-# Include monitoring endpoints
 app.include_router(monitoring_router)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
+
+
+def _escape(value: object) -> str:
+    return html.escape("" if value is None else str(value), quote=True)
+
+
+def _safe_original_filename(filename: str | None) -> str:
+    base = os.path.basename(filename or "document")
+    base = re.sub(r"[^A-Za-z0-9._ -]", "_", base).strip(" .")
+    return base or "document"
+
+
+def _validate_upload_metadata(file: UploadFile) -> str:
+    content_type = (file.content_type or "application/octet-stream").lower()
+    if content_type not in settings.parsed_allowed_content_types():
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported file type: {content_type}",
+        )
+    return content_type
+
+
+def _save_upload_with_limit(file: UploadFile, destination: Path) -> int:
+    total = 0
+    with destination.open("wb") as out_file:
+        while True:
+            chunk = file.file.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > settings.max_upload_size_bytes:
+                out_file.close()
+                destination.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="Upload exceeds the configured file-size limit",
+                )
+            out_file.write(chunk)
+
+    if total == 0:
+        destination.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty uploads are not allowed")
+    return total
 
 
 @app.on_event("startup")
@@ -75,9 +114,6 @@ def get_current_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user
-
-
-# ------------------ Auth ------------------
 
 
 @app.post("/auth/register", status_code=201)
@@ -108,9 +144,6 @@ def login(
     return Token(access_token=token)
 
 
-# ------------------ Binders ------------------
-
-
 @app.get("/binders", response_model=list[BinderOut])
 def list_binders(
     me: User = Depends(get_current_user),
@@ -139,9 +172,6 @@ def _get_binder_or_404(binder_id: int, me: User, session: Session) -> Binder:
     if not binder or binder.owner_id != me.id:
         raise HTTPException(status_code=404, detail="Binder not found")
     return binder
-
-
-# ------------------ Tasks ------------------
 
 
 @app.get("/binders/{binder_id}/tasks", response_model=list[TaskOut])
@@ -215,9 +245,6 @@ def mark_done(
     return {"ok": True}
 
 
-# ------------------ Documents ------------------
-
-
 @app.get("/binders/{binder_id}/documents", response_model=list[DocumentOut])
 def list_documents(
     binder_id: int,
@@ -241,24 +268,24 @@ def upload_document(
     session: Session = Depends(get_session),
 ) -> dict:
     _ = _get_binder_or_404(binder_id, me, session)
-
-    safe_name = f"{secrets.token_hex(16)}_{os.path.basename(file.filename)}"
+    content_type = _validate_upload_metadata(file)
+    original_name = _safe_original_filename(file.filename)
+    safe_name = f"{secrets.token_hex(16)}_{original_name}"
     dest = Path(settings.upload_dir) / safe_name
-    with dest.open("wb") as f:
-        f.write(file.file.read())
+    bytes_written = _save_upload_with_limit(file, dest)
 
     doc = Document(
         filename=safe_name,
-        original_name=file.filename,
-        content_type=file.content_type or "application/octet-stream",
-        note=note,
+        original_name=original_name,
+        content_type=content_type,
+        note=note[:500],
         binder_id=binder_id,
     )
     session.add(doc)
     session.commit()
     session.refresh(doc)
-    log_crud_event("create", "document", doc.id, me.email, f"name={file.filename}")
-    return {"ok": True}
+    log_crud_event("create", "document", doc.id, me.email, f"name={original_name};bytes={bytes_written}")
+    return {"ok": True, "id": doc.id, "bytes": bytes_written}
 
 
 @app.get("/documents/{doc_id}/download")
@@ -273,7 +300,6 @@ def download_document(
     binder = session.get(Binder, doc.binder_id)
     if not binder or binder.owner_id != me.id:
         raise HTTPException(status_code=404, detail="Doc not found")
-    from fastapi.responses import FileResponse
 
     path = Path(settings.upload_dir) / doc.filename
     if not path.exists():
@@ -281,7 +307,42 @@ def download_document(
     return FileResponse(path, media_type=doc.content_type, filename=doc.original_name)
 
 
-# ------------------ Report (inspection-ready) ------------------
+def _render_binder_report_html(binder: Binder, tasks: list[Task], docs: list[Document]) -> str:
+    open_tasks = [t for t in tasks if t.status != "done"]
+    done_tasks = [t for t in tasks if t.status == "done"]
+
+    report_html = [
+        "<html><head><meta charset='utf-8'><title>Inspection Report</title>",
+        "<style>body{font-family:Arial;margin:24px}h1{margin-bottom:0}.meta{color:#555}table{width:100%;border-collapse:collapse;margin-top:12px}td,th{border:1px solid #ddd;padding:8px}th{background:#f5f5f5}</style>",
+        "</head><body>",
+        f"<h1>{_escape(binder.name)}</h1>",
+        f"<div class='meta'>Industry: {_escape(binder.industry)} &bull; Generated: {date.today().isoformat()}</div>",
+        "<h2>Open Tasks</h2>",
+        "<table><tr><th>Task</th><th>Due</th><th>Description</th></tr>",
+    ]
+    for task in sorted(open_tasks, key=lambda x: (x.due_date or date.max)):
+        report_html.append(
+            f"<tr><td>{_escape(task.title)}</td><td>{_escape(task.due_date or '')}</td><td>{_escape(task.description)}</td></tr>"
+        )
+    report_html.append("</table>")
+
+    report_html.append("<h2>Completed Tasks</h2>")
+    report_html.append("<table><tr><th>Task</th><th>Due</th><th>Description</th></tr>")
+    for task in sorted(done_tasks, key=lambda x: (x.due_date or date.max)):
+        report_html.append(
+            f"<tr><td>{_escape(task.title)}</td><td>{_escape(task.due_date or '')}</td><td>{_escape(task.description)}</td></tr>"
+        )
+    report_html.append("</table>")
+
+    report_html.append("<h2>Documents</h2>")
+    report_html.append("<table><tr><th>Name</th><th>Note</th><th>Uploaded</th></tr>")
+    for doc in sorted(docs, key=lambda x: x.uploaded_at, reverse=True):
+        report_html.append(
+            f"<tr><td>{_escape(doc.original_name)}</td><td>{_escape(doc.note)}</td><td>{doc.uploaded_at:%Y-%m-%d}</td></tr>"
+        )
+    report_html.append("</table>")
+    report_html.append("</body></html>")
+    return "\n".join(report_html)
 
 
 @app.get("/binders/{binder_id}/report")
@@ -293,42 +354,7 @@ def binder_report(
     binder = _get_binder_or_404(binder_id, me, session)
     tasks = session.exec(select(Task).where(Task.binder_id == binder_id)).all()
     docs = session.exec(select(Document).where(Document.binder_id == binder_id)).all()
-
-    open_tasks = [t for t in tasks if t.status != "done"]
-    done_tasks = [t for t in tasks if t.status == "done"]
-
-    html = [
-        "<html><head><meta charset='utf-8'><title>Inspection Report</title>",
-        "<style>body{font-family:Arial;margin:24px}h1{margin-bottom:0}.meta{color:#555}table{width:100%;border-collapse:collapse;margin-top:12px}td,th{border:1px solid #ddd;padding:8px}th{background:#f5f5f5}</style>",
-        "</head><body>",
-        f"<h1>{binder.name}</h1>",
-        f"<div class='meta'>Industry: {binder.industry} • Generated: {date.today().isoformat()}</div>",
-        "<h2>Open Tasks</h2>",
-        "<table><tr><th>Task</th><th>Due</th><th>Description</th></tr>",
-    ]
-    for t in sorted(open_tasks, key=lambda x: (x.due_date or date.max)):
-        html.append(f"<tr><td>{t.title}</td><td>{t.due_date or ''}</td><td>{t.description}</td></tr>")
-    html.append("</table>")
-
-    html.append("<h2>Completed Tasks</h2>")
-    html.append("<table><tr><th>Task</th><th>Due</th><th>Description</th></tr>")
-    for t in sorted(done_tasks, key=lambda x: (x.due_date or date.max)):
-        html.append(f"<tr><td>{t.title}</td><td>{t.due_date or ''}</td><td>{t.description}</td></tr>")
-    html.append("</table>")
-
-    html.append("<h2>Documents</h2>")
-    html.append("<table><tr><th>Name</th><th>Note</th><th>Uploaded</th></tr>")
-    for d in sorted(docs, key=lambda x: x.uploaded_at, reverse=True):
-        html.append(f"<tr><td>{d.original_name}</td><td>{d.note}</td><td>{d.uploaded_at:%Y-%m-%d}</td></tr>")
-    html.append("</table>")
-    html.append("</body></html>")
-
-    from fastapi.responses import HTMLResponse
-
-    return HTMLResponse("\n".join(html))
-
-
-# ------------------ Static UI ------------------
+    return HTMLResponse(_render_binder_report_html(binder, tasks, docs))
 
 
 static_dir = Path(__file__).parent / "static"
