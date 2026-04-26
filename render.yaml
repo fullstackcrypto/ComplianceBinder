@@ -8,6 +8,10 @@ services:
     preDeployCommand: alembic upgrade head
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
+    disk:
+      name: inspectionbinder-staging-uploads
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: ENV
         value: staging
