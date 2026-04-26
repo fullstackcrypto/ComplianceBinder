@@ -5,13 +5,15 @@ import os
 import re
 import secrets
 from datetime import date, datetime
+from io import BytesIO
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from .config import settings
@@ -27,11 +29,12 @@ from .models import Binder, Document, Task, User
 from .monitoring import router as monitoring_router
 from .schemas import BinderCreate, BinderOut, DocumentOut, TaskCreate, TaskOut, Token, UserCreate
 from .security import create_access_token, decode_token, hash_password, verify_password
+from .templates import default_tasks_for_industry
 
 
 logger = configure_logging()
 
-app = FastAPI(title="ComplianceBinder", version="0.1.0")
+app = FastAPI(title="ComplianceBinder", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -46,6 +49,14 @@ app.add_middleware(RequestLoggingMiddleware)
 app.include_router(monitoring_router)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
+
+
+class CheckoutRequest(BaseModel):
+    plan: str
+
+
+class CheckoutResponse(BaseModel):
+    url: str
 
 
 def _escape(value: object) -> str:
@@ -144,6 +155,47 @@ def login(
     return Token(access_token=token)
 
 
+@app.get("/billing/plans")
+def billing_plans() -> dict:
+    return {
+        "starter": {"label": "Starter", "price": "$19 / month", "mode": "subscription"},
+        "pro": {"label": "Pro", "price": "$49 / month", "mode": "subscription"},
+        "setup": {"label": "Done-With-You Setup", "price": "$299 one-time", "mode": "payment"},
+    }
+
+
+@app.post("/billing/checkout", response_model=CheckoutResponse)
+def create_checkout_session(
+    payload: CheckoutRequest,
+    me: User = Depends(get_current_user),
+) -> CheckoutResponse:
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+
+    price_map = {
+        "starter": (settings.stripe_price_starter, "subscription"),
+        "pro": (settings.stripe_price_pro, "subscription"),
+        "setup": (settings.stripe_price_setup, "payment"),
+    }
+    plan = payload.plan.strip().lower()
+    price_id, mode = price_map.get(plan, ("", ""))
+    if not price_id:
+        raise HTTPException(status_code=400, detail="Invalid or unconfigured billing plan")
+
+    import stripe
+
+    stripe.api_key = settings.stripe_secret_key
+    checkout = stripe.checkout.Session.create(
+        mode=mode,
+        line_items=[{"price": price_id, "quantity": 1}],
+        customer_email=me.email,
+        success_url=f"{settings.public_app_url.rstrip('/')}/?payment=success",
+        cancel_url=f"{settings.public_app_url.rstrip('/')}/?payment=cancelled",
+        metadata={"user_id": str(me.id), "email": me.email, "plan": plan},
+    )
+    return CheckoutResponse(url=checkout.url)
+
+
 @app.get("/binders", response_model=list[BinderOut])
 def list_binders(
     me: User = Depends(get_current_user),
@@ -163,7 +215,13 @@ def create_binder(
     session.add(binder)
     session.commit()
     session.refresh(binder)
-    log_crud_event("create", "binder", binder.id, me.email, f"name={binder.name}")
+
+    template_tasks = default_tasks_for_industry(binder.industry, binder.id)
+    if template_tasks:
+        session.add_all(template_tasks)
+        session.commit()
+
+    log_crud_event("create", "binder", binder.id, me.email, f"name={binder.name};template_tasks={len(template_tasks)}")
     return BinderOut(id=binder.id, name=binder.name, industry=binder.industry, created_at=binder.created_at)
 
 
@@ -345,6 +403,54 @@ def _render_binder_report_html(binder: Binder, tasks: list[Task], docs: list[Doc
     return "\n".join(report_html)
 
 
+def _build_report_pdf(binder: Binder, tasks: list[Task], docs: list[Document]) -> bytes:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import inch
+    from reportlab.pdfgen import canvas
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    left = 0.75 * inch
+    y = height - 0.75 * inch
+
+    def line(text: str, size: int = 10, gap: int = 14) -> None:
+        nonlocal y
+        if y < 0.75 * inch:
+            pdf.showPage()
+            y = height - 0.75 * inch
+        pdf.setFont("Helvetica", size)
+        pdf.drawString(left, y, text[:110])
+        y -= gap
+
+    line(str(binder.name), 16, 22)
+    line(f"Industry: {binder.industry} | Generated: {date.today().isoformat()}", 10, 20)
+
+    line("Open Tasks", 13, 18)
+    for task in sorted([t for t in tasks if t.status != "done"], key=lambda x: (x.due_date or date.max)):
+        due = task.due_date.isoformat() if task.due_date else "No due date"
+        line(f"- {task.title} ({due})", 10, 13)
+        if task.description:
+            line(f"  {task.description}", 9, 12)
+
+    y -= 8
+    line("Completed Tasks", 13, 18)
+    for task in sorted([t for t in tasks if t.status == "done"], key=lambda x: (x.due_date or date.max)):
+        due = task.due_date.isoformat() if task.due_date else "No due date"
+        line(f"- {task.title} ({due})", 10, 13)
+
+    y -= 8
+    line("Documents", 13, 18)
+    for doc in sorted(docs, key=lambda x: x.uploaded_at, reverse=True):
+        line(f"- {doc.original_name} | Uploaded {doc.uploaded_at:%Y-%m-%d}", 10, 13)
+        if doc.note:
+            line(f"  Note: {doc.note}", 9, 12)
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer.read()
+
+
 @app.get("/binders/{binder_id}/report")
 def binder_report(
     binder_id: int,
@@ -355,6 +461,24 @@ def binder_report(
     tasks = session.exec(select(Task).where(Task.binder_id == binder_id)).all()
     docs = session.exec(select(Document).where(Document.binder_id == binder_id)).all()
     return HTMLResponse(_render_binder_report_html(binder, tasks, docs))
+
+
+@app.get("/binders/{binder_id}/report.pdf")
+def binder_report_pdf(
+    binder_id: int,
+    me: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    binder = _get_binder_or_404(binder_id, me, session)
+    tasks = session.exec(select(Task).where(Task.binder_id == binder_id)).all()
+    docs = session.exec(select(Document).where(Document.binder_id == binder_id)).all()
+    pdf_bytes = _build_report_pdf(binder, tasks, docs)
+    filename = f"inspection-report-{binder_id}.pdf"
+    return StreamingResponse(
+        BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 static_dir = Path(__file__).parent / "static"
