@@ -21,6 +21,7 @@ client = TestClient(app)
 
 
 def auth_headers(email: str | None = None, password: str = "password123") -> tuple[str, dict[str, str]]:
+    password = password[:72]
     email = email or f"tester-{uuid4().hex}@example.com"
     client.post("/auth/register", json={"email": email, "password": password})
     response = client.post("/auth/token", data={"username": email, "password": password})
@@ -112,6 +113,14 @@ def test_upload_rejects_unsupported_file_type() -> None:
         data={"note": "bad"},
     )
     assert response.status_code == 415
+
+
+def test_oversized_password_is_rejected_cleanly() -> None:
+    response = client.post(
+        "/auth/register",
+        json={"email": f"long-password-{uuid4().hex}@example.com", "password": "x" * 73},
+    )
+    assert response.status_code == 422
 
 
 def test_reminder_job_requires_secret() -> None:
