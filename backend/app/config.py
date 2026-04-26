@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     max_upload_size_bytes: int = 10 * 1024 * 1024
     allowed_content_types: str = "application/pdf,image/png,image/jpeg"
 
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_starter: str = ""
+    stripe_price_pro: str = ""
+    stripe_price_setup: str = ""
+
+    public_app_url: str = "http://localhost:8000"
+
     def parsed_allowed_origins(self) -> List[str]:
         if self.allowed_origins.strip() == "*":
             return ["*"]
