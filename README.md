@@ -1,3 +1,5 @@
+[![CI](https://github.com/fullstackcrypto/ComplianceBinder/actions/workflows/ci.yml/badge.svg)](https://github.com/fullstackcrypto/ComplianceBinder/actions/workflows/ci.yml)
+
 # InspectionBinder / ComplianceBinder
 
 A focused digital inspection binder SaaS for small operators who need documents, tasks, and reports ready before an inspection.
