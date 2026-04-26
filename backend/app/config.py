@@ -1,57 +1,44 @@
-*** Begin Patch
-*** Update File: backend/app/config.py
-@@
--from pydantic_settings import BaseSettings, SettingsConfigDict
--
--class Settings(BaseSettings):
--    """Central configuration. Values can be overridden via environment variables or a `.env` file.
--    """
--    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
--    # Security
--    secret_key: str = "CHANGE_ME"  # override in .env
--    access_token_expire_minutes: int = 60 * 24 * 7  # 7 days
--    # Storage
--    database_url: str = "sqlite:///./compliancebinder.db"
--    upload_dir: str = "./uploads"
--    # CORS
--    allowed_origins: str = "*"  # for MVP; lock down later
-- 
--settings = Settings()
-+from pydantic_settings import BaseSettings, SettingsConfigDict
-+from typing import List, Optional
-+import os
-+
-+
-+class Settings(BaseSettings):
-+    """Central configuration. Values can be overridden via environment variables or a `.env` file."""
-+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
-+
-+    # Security - MUST be overridden in production
-+    secret_key: Optional[str] = None
-+    access_token_expire_minutes: int = 60 * 24 * 7  # 7 days
-+
-+    # Storage / DB
-+    database_url: str = "sqlite:///./compliancebinder.db"
-+    upload_dir: str = "./uploads"
-+
-+    # CORS - comma-separated or JSON list in env -> parsed to list at startup
-+    allowed_origins: Optional[str] = None
-+
-+    # Upload controls
-+    max_upload_size_bytes: int = 10 * 1024 * 1024  # 10 MB default
-+    allowed_content_types: List[str] = ["application/pdf", "image/png", "image/jpeg"]
-+
-+    def parsed_allowed_origins(self) -> List[str]:
-+        if not self.allowed_origins or self.allowed_origins.strip() == "":
-+            return []
-+        # allow comma separated or single origin
-+        return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
-+
-+
-+settings = Settings()
-+
-+# Fail fast: require secret key in non-dev envs
-+if os.environ.get("ENV", "").lower() in ("prod", "production", "staging"):
-+    if not settings.secret_key:
-+        raise RuntimeError("SECRET_KEY must be set in production (env var SECRET_KEY)")
-*** End Patch
+from __future__ import annotations
+
+from typing import List
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Central configuration for ComplianceBinder."""
+
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    env: str = "dev"
+    secret_key: str = "CHANGE_ME_DEV_ONLY"
+    access_token_expire_minutes: int = 60 * 24 * 7
+
+    database_url: str = "sqlite:///./compliancebinder.db"
+    upload_dir: str = "./uploads"
+
+    allowed_origins: str = "*"
+    max_upload_size_bytes: int = 10 * 1024 * 1024
+    allowed_content_types: str = "application/pdf,image/png,image/jpeg"
+
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_starter: str = ""
+    stripe_price_pro: str = ""
+    stripe_price_setup: str = ""
+
+    public_app_url: str = "http://localhost:8000"
+
+    def parsed_allowed_origins(self) -> List[str]:
+        if self.allowed_origins.strip() == "*":
+            return ["*"]
+        return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
+
+    def parsed_allowed_content_types(self) -> set[str]:
+        return {item.strip().lower() for item in self.allowed_content_types.split(",") if item.strip()}
+
+
+settings = Settings()
+
+if settings.env.lower() in {"prod", "production", "staging"} and settings.secret_key == "CHANGE_ME_DEV_ONLY":
+    raise RuntimeError("Set a strong signing key before running outside development.")

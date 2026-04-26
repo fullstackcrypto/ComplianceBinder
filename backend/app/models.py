@@ -1,7 +1,7 @@
-from datetime import datetime, date
-from typing import Optional, List, TYPE_CHECKING
+from datetime import date, datetime
+from typing import List, Optional, TYPE_CHECKING
 
-from sqlmodel import SQLModel, Field, Relationship
+from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
     pass
@@ -12,6 +12,12 @@ class User(SQLModel, table=True):
     email: str = Field(index=True, unique=True)
     password_hash: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    billing_plan: str = "free"  # free | starter | pro | setup
+    billing_status: str = "inactive"  # inactive | active | trialing | past_due | canceled
+    stripe_customer_id: str = ""
+    stripe_subscription_id: str = ""
+    billing_updated_at: Optional[datetime] = None
 
     binders: List["Binder"] = Relationship(back_populates="owner")
 
