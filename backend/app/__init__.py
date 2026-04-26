@@ -1,0 +1,1 @@
+"""InspectionBinder backend application package."""
