@@ -8,7 +8,7 @@ from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -59,6 +59,13 @@ class CheckoutResponse(BaseModel):
     url: str
 
 
+class BillingStatusResponse(BaseModel):
+    plan: str
+    status: str
+    stripe_customer_id: str = ""
+    stripe_subscription_id: str = ""
+
+
 def _escape(value: object) -> str:
     return html.escape("" if value is None else str(value), quote=True)
 
@@ -100,6 +107,29 @@ def _save_upload_with_limit(file: UploadFile, destination: Path) -> int:
         destination.unlink(missing_ok=True)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty uploads are not allowed")
     return total
+
+
+def _has_paid_access(user: User) -> bool:
+    return user.billing_status in {"active", "trialing"} or user.billing_plan in {"setup", "starter", "pro"}
+
+
+def _apply_billing_update(
+    session: Session,
+    user: User,
+    plan: str,
+    billing_status: str,
+    stripe_customer_id: str = "",
+    stripe_subscription_id: str = "",
+) -> None:
+    user.billing_plan = plan or user.billing_plan or "free"
+    user.billing_status = billing_status or user.billing_status or "inactive"
+    if stripe_customer_id:
+        user.stripe_customer_id = stripe_customer_id
+    if stripe_subscription_id:
+        user.stripe_subscription_id = stripe_subscription_id
+    user.billing_updated_at = datetime.utcnow()
+    session.add(user)
+    session.commit()
 
 
 @app.on_event("startup")
@@ -164,6 +194,16 @@ def billing_plans() -> dict:
     }
 
 
+@app.get("/billing/status", response_model=BillingStatusResponse)
+def billing_status(me: User = Depends(get_current_user)) -> BillingStatusResponse:
+    return BillingStatusResponse(
+        plan=me.billing_plan,
+        status=me.billing_status,
+        stripe_customer_id=me.stripe_customer_id,
+        stripe_subscription_id=me.stripe_subscription_id,
+    )
+
+
 @app.post("/billing/checkout", response_model=CheckoutResponse)
 def create_checkout_session(
     payload: CheckoutRequest,
@@ -194,6 +234,58 @@ def create_checkout_session(
         metadata={"user_id": str(me.id), "email": me.email, "plan": plan},
     )
     return CheckoutResponse(url=checkout.url)
+
+
+@app.post("/billing/webhook")
+async def stripe_webhook(request: Request, session: Session = Depends(get_session)) -> dict:
+    if not settings.stripe_secret_key or not settings.stripe_webhook_secret:
+        raise HTTPException(status_code=503, detail="Stripe webhook is not configured")
+
+    import stripe
+
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe.Webhook.construct_event(payload, signature, settings.stripe_webhook_secret)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid Stripe webhook payload") from exc
+
+    event_type = event.get("type")
+    obj = event.get("data", {}).get("object", {})
+
+    if event_type == "checkout.session.completed":
+        metadata = obj.get("metadata", {}) or {}
+        user_id = metadata.get("user_id")
+        plan = metadata.get("plan", "starter")
+        if user_id:
+            user = session.get(User, int(user_id))
+            if user:
+                checkout_status = "active" if obj.get("payment_status") == "paid" else "trialing"
+                _apply_billing_update(
+                    session,
+                    user,
+                    plan=plan,
+                    billing_status=checkout_status,
+                    stripe_customer_id=obj.get("customer") or "",
+                    stripe_subscription_id=obj.get("subscription") or "",
+                )
+
+    elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
+        customer_id = obj.get("customer") or ""
+        user = session.exec(select(User).where(User.stripe_customer_id == customer_id)).first() if customer_id else None
+        if user:
+            subscription_status = obj.get("status") or "inactive"
+            plan = user.billing_plan if event_type == "customer.subscription.updated" else "free"
+            _apply_billing_update(
+                session,
+                user,
+                plan=plan,
+                billing_status=subscription_status if event_type == "customer.subscription.updated" else "canceled",
+                stripe_customer_id=customer_id,
+                stripe_subscription_id=obj.get("id") or user.stripe_subscription_id,
+            )
+
+    return {"received": True}
 
 
 @app.get("/binders", response_model=list[BinderOut])
@@ -469,6 +561,9 @@ def binder_report_pdf(
     me: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    if not _has_paid_access(me):
+        raise HTTPException(status_code=402, detail="PDF export requires an active paid plan")
+
     binder = _get_binder_or_404(binder_id, me, session)
     tasks = session.exec(select(Task).where(Task.binder_id == binder_id)).all()
     docs = session.exec(select(Document).where(Document.binder_id == binder_id)).all()
