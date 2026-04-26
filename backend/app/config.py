@@ -49,5 +49,12 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-if settings.env.lower() in {"prod", "production", "staging"} and settings.secret_key == "CHANGE_ME_DEV_ONLY":
-    raise RuntimeError("Set a strong signing key before running outside development.")
+_RESTRICTED_ENVS = {"prod", "production", "staging"}
+
+if settings.env.lower() in _RESTRICTED_ENVS:
+    if settings.secret_key == "CHANGE_ME_DEV_ONLY":
+        raise RuntimeError("Set a strong signing key before running outside development.")
+    if settings.allowed_origins.strip() == "*":
+        raise RuntimeError("Set ALLOWED_ORIGINS to the deployed app origin outside development.")
+    if "localhost" in settings.public_app_url or "127.0.0.1" in settings.public_app_url:
+        raise RuntimeError("Set PUBLIC_APP_URL to the deployed app URL outside development.")
