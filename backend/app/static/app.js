@@ -3,11 +3,10 @@ let token = localStorage.getItem('cb_token') || '';
 let currentBinderId = null;
 let currentEmail = localStorage.getItem('cb_email') || '';
 
-// UI state
 let allBinders = [];
 let allTasks = [];
 let allDocs = [];
-let taskFilter = 'open'; // open | all
+let taskFilter = 'open';
 let activeTab = 'overview';
 
 const els = {
@@ -21,6 +20,7 @@ const els = {
   docList: () => document.getElementById('docList'),
   binderSearch: () => document.getElementById('binderSearch'),
   dropzone: () => document.getElementById('dropzone'),
+  billingStatus: () => document.getElementById('billingStatus'),
 };
 
 function toast(msg, isError = false) {
@@ -29,7 +29,7 @@ function toast(msg, isError = false) {
   t.style.borderColor = isError ? 'rgba(255, 90, 106, 0.45)' : 'var(--border)';
   t.classList.remove('hidden');
   clearTimeout(toast._timer);
-  toast._timer = setTimeout(() => t.classList.add('hidden'), 2400);
+  toast._timer = setTimeout(() => t.classList.add('hidden'), 3000);
 }
 
 function setMsg(el, msg, isError=false) {
@@ -103,9 +103,36 @@ async function login() {
     localStorage.setItem('cb_email', currentEmail);
     showApp();
     toast('Signed in');
-    await refreshBinders();
+    await Promise.all([refreshBillingStatus(), refreshBinders()]);
   } catch (e) {
     setMsg(msg, 'Login failed: ' + (e.message || ''), true);
+  }
+}
+
+async function refreshBillingStatus() {
+  if (!token) return;
+  try {
+    const status = await apiFetch('/billing/status', { headers: authHeaders() });
+    const el = els.billingStatus();
+    if (el) el.textContent = `Plan: ${status.plan || 'free'} / ${status.status || 'inactive'}`;
+  } catch (e) {
+    const el = els.billingStatus();
+    if (el) el.textContent = 'Plan: unknown';
+  }
+}
+
+async function startCheckout(plan) {
+  if (!token) return toast('Login first', true);
+  try {
+    const data = await apiFetch('/billing/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ plan })
+    });
+    if (!data.url) throw new Error('Checkout URL missing');
+    window.location.href = data.url;
+  } catch (e) {
+    toast('Checkout unavailable: ' + e.message, true);
   }
 }
 
@@ -130,9 +157,7 @@ function renderBinders() {
   filtered.forEach(b => {
     const li = document.createElement('li');
     li.className = b.id === currentBinderId ? 'selected' : '';
-    li.innerHTML = `
-      <div><strong>${escapeHtml(b.name)}</strong> <span class="meta">(${escapeHtml(b.industry)})</span></div>
-    `;
+    li.innerHTML = `<div><strong>${escapeHtml(b.name)}</strong> <span class="meta">(${escapeHtml(b.industry)})</span></div>`;
     li.style.cursor = 'pointer';
     li.onclick = () => selectBinder(b.id, b.name, b.industry);
     list.appendChild(li);
@@ -153,7 +178,7 @@ async function createBinder() {
     body: JSON.stringify({ name, industry })
   });
   document.getElementById('binderName').value = '';
-  toast('Binder created');
+  toast(industry === 'assisted_living' ? 'Assisted Living binder created with starter checklist' : 'Binder created');
   await refreshBinders();
 }
 
@@ -162,10 +187,7 @@ async function selectBinder(id, name, industry='') {
   document.getElementById('binderTitle').textContent = name;
   document.getElementById('binderActions').classList.remove('hidden');
   els.binderMeta().textContent = industry ? `Industry: ${industry}` : '';
-
-  // Default to Overview tab on binder change
   setTab('overview');
-
   await Promise.all([refreshTasks(), refreshDocs()]);
   renderBinders();
   updateStatsAndNext();
@@ -190,29 +212,25 @@ function renderTasks() {
     return;
   }
 
-  items
-    .slice()
-    .sort((a,b) => (a.due_date||'9999').localeCompare(b.due_date||'9999'))
-    .forEach(t => {
-      const li = document.createElement('li');
-      if (t.is_overdue) li.classList.add('overdue');
-      const due = t.due_date ? `Due: ${t.due_date}` : '';
-      const done = t.status === 'done';
-      const overdueIcon = t.is_overdue ? '⚠️ ' : '';
-      li.innerHTML = `
-        <div class="row between" style="margin:0; gap: 8px;">
-          <div>
-            <strong>${done ? '✅' : '⬜'} ${overdueIcon}${escapeHtml(t.title)}</strong>
-            <span class="meta">${escapeHtml(due)}</span>
-          </div>
-          ${done ? '' : `<button class="secondary" data-done="${t.id}">Mark done</button>`}
+  items.slice().sort((a,b) => (a.due_date||'9999').localeCompare(b.due_date||'9999')).forEach(t => {
+    const li = document.createElement('li');
+    if (t.is_overdue) li.classList.add('overdue');
+    const due = t.due_date ? `Due: ${t.due_date}` : '';
+    const done = t.status === 'done';
+    const overdueIcon = t.is_overdue ? 'Overdue: ' : '';
+    li.innerHTML = `
+      <div class="row between" style="margin:0; gap: 8px;">
+        <div>
+          <strong>${done ? 'Done: ' : 'Open: '} ${overdueIcon}${escapeHtml(t.title)}</strong>
+          <span class="meta">${escapeHtml(due)}</span>
         </div>
-        <div class="meta">${escapeHtml(t.description || '')}</div>
-      `;
-      list.appendChild(li);
-    });
+        ${done ? '' : `<button class="secondary" data-done="${t.id}">Mark done</button>`}
+      </div>
+      <div class="meta">${escapeHtml(t.description || '')}</div>
+    `;
+    list.appendChild(li);
+  });
 
-  // wire buttons
   list.querySelectorAll('button[data-done]').forEach(btn => {
     btn.onclick = async () => {
       const id = btn.getAttribute('data-done');
@@ -269,7 +287,6 @@ function renderDocs() {
     a.textContent = d.original_name;
     a.onclick = async (e) => {
       e.preventDefault();
-      // download via authenticated fetch
       const res = await fetch(`/documents/${d.id}/download`, { headers: authHeaders() });
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -333,6 +350,23 @@ async function openReport() {
   w.document.close();
 }
 
+async function downloadPdfReport() {
+  if (!currentBinderId) return;
+  const res = await fetch(`/binders/${currentBinderId}/report.pdf`, { headers: authHeaders() });
+  if (!res.ok) {
+    const txt = await res.text();
+    toast('PDF unavailable: ' + txt.slice(0, 180), true);
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const tmp = document.createElement('a');
+  tmp.href = url;
+  tmp.download = `inspection-report-${currentBinderId}.pdf`;
+  tmp.click();
+  URL.revokeObjectURL(url);
+}
+
 async function copyReportHtml() {
   const html = await apiFetch(`/binders/${currentBinderId}/report`, { headers: authHeaders() });
   await navigator.clipboard.writeText(html);
@@ -355,10 +389,10 @@ function updateStatsAndNext() {
 
   const n = els.nextStep();
   if (!n) return;
-  if (overdue > 0) n.textContent = `⚠️ You have ${overdue} overdue task(s). Complete them to stay inspection‑ready.`;
-  else if (open > 0) n.textContent = 'Finish your next open task (keeps you inspection‑ready).';
-  else if (docs === 0) n.textContent = 'Upload at least one supporting document (license, inspection, photo).';
-  else n.textContent = 'Open the report and print/save it as your inspection binder.';
+  if (overdue > 0) n.textContent = `You have ${overdue} overdue task(s). Complete them to stay inspection-ready.`;
+  else if (open > 0) n.textContent = 'Finish your next open task.';
+  else if (docs === 0) n.textContent = 'Upload at least one supporting document.';
+  else n.textContent = 'Open the report and export the PDF when ready.';
 }
 
 function setupDropzone() {
@@ -387,15 +421,12 @@ document.getElementById('addTaskBtn').onclick = addTask;
 document.getElementById('uploadDocBtn').onclick = uploadDoc;
 document.getElementById('logoutBtn').onclick = logout;
 
-// Sidebar search
 els.binderSearch()?.addEventListener('input', renderBinders);
 
-// Tabs
 document.querySelectorAll('.tab').forEach(btn => {
   btn.addEventListener('click', () => setTab(btn.dataset.tab));
 });
 
-// Task filters
 document.querySelectorAll('.segBtn').forEach(btn => {
   btn.addEventListener('click', () => {
     taskFilter = btn.dataset.filter;
@@ -404,14 +435,17 @@ document.querySelectorAll('.segBtn').forEach(btn => {
   });
 });
 
-// Report actions
+document.querySelectorAll('button[data-plan]').forEach(btn => {
+  btn.addEventListener('click', () => startCheckout(btn.dataset.plan));
+});
+
 document.getElementById('openReportBtn')?.addEventListener('click', openReport);
+document.getElementById('downloadPdfBtn')?.addEventListener('click', downloadPdfReport);
 document.getElementById('copyReportBtn')?.addEventListener('click', copyReportHtml);
 
 setupDropzone();
 
-// Auto-login if token stored
 if (token) {
   showApp();
-  refreshBinders().catch(() => logout());
+  Promise.all([refreshBillingStatus(), refreshBinders()]).catch(() => logout());
 }
