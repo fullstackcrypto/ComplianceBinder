@@ -1,0 +1,25 @@
+name: Staging smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: 'Staging app URL, for example https://example.onrender.com'
+        required: true
+        type: string
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check staging app health
+        run: |
+          APP_URL='${{ inputs.app_url }}'
+          curl -fsS "$APP_URL/health"
+          curl -fsS "$APP_URL/status"
+
+      - name: Check legal pages
+        run: |
+          APP_URL='${{ inputs.app_url }}'
+          curl -fsS "$APP_URL/privacy.html" | grep -q "InspectionBinder"
+          curl -fsS "$APP_URL/terms.html" | grep -q "InspectionBinder"
