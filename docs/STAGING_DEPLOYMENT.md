@@ -4,24 +4,41 @@ This runbook deploys InspectionBinder / ComplianceBinder to a staging environmen
 
 ## Recommended staging stack
 
-Use a boring managed stack:
+Use the included Render blueprint unless you have a better reason not to.
 
-- Web service: Render, Railway, Fly.io, or a small VPS
-- Database: managed Postgres
-- File storage: local disk for staging only; S3-compatible storage before broader production use
+- Web service: Render web service from `render.yaml`
+- Database: Render managed Postgres
+- File storage: Render persistent disk mounted at `/var/data`
 - Payments: Stripe test mode
 - Mail: SMTP-compatible provider in sandbox/test mode
 - Monitoring: uptime check against `/health`
 
+## Render blueprint
+
+The repo includes:
+
+```text
+render.yaml
+```
+
+It defines:
+
+- staging web service
+- managed Postgres database
+- persistent upload disk
+- build command: `pip install -r requirements-dev.txt`
+- pre-deploy migration command: `alembic upgrade head`
+- start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+
 ## Required staging environment
 
-Set these variables in the staging host:
+Set these variables in Render after creating the blueprint service:
 
 ```env
 ENV=staging
 SECRET_KEY=<strong random staging signing key>
-DATABASE_URL=<staging postgres connection string>
-UPLOAD_DIR=/var/lib/inspectionbinder/uploads
+DATABASE_URL=<provided by Render Postgres>
+UPLOAD_DIR=/var/data/uploads
 ALLOWED_ORIGINS=https://<staging-domain>
 PUBLIC_APP_URL=https://<staging-domain>
 
@@ -41,23 +58,26 @@ MAIL_KEY=<smtp api key or password>
 MAIL_USE_TLS=true
 ```
 
-## Build/start commands
-
-From the `backend` directory:
+Generate secrets locally with:
 
 ```bash
-python -m pip install --upgrade pip
-pip install -r requirements-dev.txt
-alembic upgrade head
-uvicorn app.main:app --host 0.0.0.0 --port $PORT
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-For a deployment platform with separate build/start commands:
+## Manual build/start commands
+
+If not using Render blueprint:
 
 Build:
 
 ```bash
-cd backend && pip install -r requirements-dev.txt && alembic upgrade head
+cd backend && pip install -r requirements-dev.txt
+```
+
+Pre-deploy migration:
+
+```bash
+cd backend && alembic upgrade head
 ```
 
 Start:
@@ -75,12 +95,30 @@ cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 5. Confirm starter tasks are created.
 6. Upload a small PDF.
 7. Confirm HTML report opens.
-8. Start Stripe test checkout.
-9. Complete payment with Stripe test card.
-10. Confirm `/billing/status` shows active or trialing.
-11. Download PDF report.
-12. Call `/reminders/run` with the configured `X-Cron-Secret` header.
-13. Confirm reminder response returns `ok: true` or dry-run output in staging.
+8. Try PDF export before payment; it should be blocked.
+9. Start Stripe test checkout.
+10. Complete payment with Stripe test card.
+11. Confirm `/billing/status` shows active or trialing.
+12. Download PDF report.
+13. Call `/reminders/run` with the configured `X-Cron-Secret` header.
+14. Confirm reminder response returns `ok: true` or dry-run output in staging.
+
+## Scheduled reminders from GitHub Actions
+
+The repo includes:
+
+```text
+.github/workflows/reminders.yml
+```
+
+Set these repository secrets only after staging exists:
+
+```text
+STAGING_APP_URL=https://<staging-domain>
+REMINDER_CRON_SECRET=<same value used by Render>
+```
+
+The workflow runs daily and can also be triggered manually.
 
 ## Monitoring
 
@@ -105,5 +143,7 @@ Do not promote staging to production until:
 - Alembic migration runs cleanly.
 - Stripe test checkout activates billing.
 - Paid PDF export works.
+- Cancellation removes PDF access.
 - Reminder job runs without authentication failure.
 - Privacy and terms pages are reachable.
+- Uploaded files persist after redeploy.
