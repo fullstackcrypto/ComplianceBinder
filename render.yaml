@@ -59,3 +59,5 @@ services:
 databases:
   - name: inspectionbinder-staging-db
     plan: starter
+
+# Contributed via bounty system
