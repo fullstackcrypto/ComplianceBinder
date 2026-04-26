@@ -5,7 +5,7 @@ services:
     plan: starter
     rootDir: backend
     buildCommand: pip install -r requirements-dev.txt
-    preDeployCommand: alembic upgrade head
+    preDeployCommand: python scripts/validate_launch_config.py && alembic upgrade head
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     disk:
