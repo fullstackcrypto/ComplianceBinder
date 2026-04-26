@@ -19,6 +19,9 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Virtual environments
 .venv/
@@ -37,12 +40,19 @@ env/
 *.db
 *.sqlite
 *.sqlite3
+backend/compliancebinder.db
+backend/compliancebinder_test.db
 
-# Environment files (sample is ok)
+# Environment files
 .env
+.env.*
+!.env.example
 
-# Uploaded files
+# Uploaded files and runtime storage
 uploads/
+test_uploads/
+backend/uploads/
+backend/test_uploads/
 
 # Logs
 *.log
