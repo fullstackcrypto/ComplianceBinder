@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from pathlib import Path
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from app.config import settings
+from app.db import init_db
 from app.main import app
 
 
+init_db()
 client = TestClient(app)
 
 
-def auth_headers(email: str = "tester@example.com", password: str = "password123") -> dict[str, str]:
+def auth_headers(email: str | None = None, password: str = "password123") -> dict[str, str]:
+    email = email or f"tester-{uuid4().hex}@example.com"
     client.post("/auth/register", json={"email": email, "password": password})
     response = client.post("/auth/token", data={"username": email, "password": password})
     assert response.status_code == 200, response.text
@@ -26,7 +28,7 @@ def test_health_endpoint_responds() -> None:
 
 
 def test_assisted_living_binder_seeds_template_tasks() -> None:
-    headers = auth_headers("assisted-template@example.com")
+    headers = auth_headers()
     response = client.post(
         "/binders",
         json={"name": "Sunrise Care Home", "industry": "assisted_living"},
@@ -43,7 +45,7 @@ def test_assisted_living_binder_seeds_template_tasks() -> None:
 
 
 def test_report_html_escapes_user_content() -> None:
-    headers = auth_headers("escape-test@example.com")
+    headers = auth_headers()
     binder = client.post(
         "/binders",
         json={"name": "<script>alert(1)</script>", "industry": "general"},
@@ -59,7 +61,7 @@ def test_report_html_escapes_user_content() -> None:
 
 
 def test_pdf_export_requires_paid_status() -> None:
-    headers = auth_headers("pdf-gate@example.com")
+    headers = auth_headers()
     binder = client.post("/binders", json={"name": "PDF Gate", "industry": "general"}, headers=headers)
     assert binder.status_code == 201, binder.text
 
@@ -68,7 +70,7 @@ def test_pdf_export_requires_paid_status() -> None:
 
 
 def test_upload_rejects_unsupported_file_type() -> None:
-    headers = auth_headers("upload-reject@example.com")
+    headers = auth_headers()
     binder = client.post("/binders", json={"name": "Upload Gate", "industry": "general"}, headers=headers)
     assert binder.status_code == 201, binder.text
     binder_id = binder.json()["id"]
