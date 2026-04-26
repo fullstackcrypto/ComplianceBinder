@@ -14,7 +14,6 @@ import platform
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -23,6 +22,7 @@ from sqlmodel import Session, func, select
 from .config import settings
 from .db import engine, get_session
 from .models import Binder, Document, Task, User
+from .reminders import router as reminders_router
 
 
 logger = logging.getLogger("compliancebinder.monitoring")
@@ -32,6 +32,7 @@ router = APIRouter(tags=["monitoring"])
 
 class HealthResponse(BaseModel):
     """Health check response."""
+
     status: str
     timestamp: str
     version: str
@@ -41,6 +42,7 @@ class HealthResponse(BaseModel):
 
 class MetricsResponse(BaseModel):
     """System metrics response."""
+
     timestamp: str
     users_total: int
     binders_total: int
@@ -54,6 +56,7 @@ class MetricsResponse(BaseModel):
 
 class SystemStatusResponse(BaseModel):
     """Comprehensive system status response."""
+
     timestamp: str
     version: str
     python_version: str
@@ -64,7 +67,6 @@ class SystemStatusResponse(BaseModel):
     storage_bytes: int
 
 
-# Track application start time for uptime calculation
 _start_time: float = time.time()
 
 
@@ -85,7 +87,6 @@ def _check_storage_health() -> str:
         upload_path = Path(settings.upload_dir)
         if not upload_path.exists():
             return "not_configured"
-        # Check if writable by attempting to create a temp file
         test_file = upload_path / ".health_check"
         test_file.touch()
         test_file.unlink()
@@ -109,27 +110,15 @@ def _get_storage_size() -> int:
 
 @router.get("/health", response_model=HealthResponse)
 def health_check() -> HealthResponse:
-    """
-    Health check endpoint for monitoring service availability.
-    
-    Returns the current health status of the application, including:
-    - Database connectivity
-    - Storage accessibility
-    - Application version
-    """
+    """Health check endpoint for monitoring service availability."""
     db_status = _check_database_health()
     storage_status = _check_storage_health()
-    
-    # Overall status is healthy only if all components are healthy
-    if db_status == "healthy" and storage_status == "healthy":
-        overall_status = "healthy"
-    else:
-        overall_status = "degraded"
-    
+    overall_status = "healthy" if db_status == "healthy" and storage_status == "healthy" else "degraded"
+
     return HealthResponse(
         status=overall_status,
         timestamp=datetime.utcnow().isoformat(),
-        version="0.1.0",
+        version="0.2.0",
         database=db_status,
         storage=storage_status,
     )
@@ -137,40 +126,20 @@ def health_check() -> HealthResponse:
 
 @router.get("/metrics", response_model=MetricsResponse)
 def get_metrics(session: Session = Depends(get_session)) -> MetricsResponse:
-    """
-    Metrics endpoint for system statistics.
-    
-    Returns key metrics including:
-    - Total counts for users, binders, tasks, and documents
-    - Task status breakdown (open, done, overdue)
-    - Storage usage in bytes
-    """
-    # Get counts using efficient SQL queries
+    """Metrics endpoint for system statistics."""
     users_total = session.exec(select(func.count()).select_from(User)).first() or 0
     binders_total = session.exec(select(func.count()).select_from(Binder)).first() or 0
     tasks_total = session.exec(select(func.count()).select_from(Task)).first() or 0
     documents_total = session.exec(select(func.count()).select_from(Document)).first() or 0
-    
-    # Task status breakdown
-    tasks_open = session.exec(
-        select(func.count()).select_from(Task).where(Task.status == "open")
-    ).first() or 0
-    tasks_done = session.exec(
-        select(func.count()).select_from(Task).where(Task.status == "done")
-    ).first() or 0
-    
-    # Overdue tasks (open tasks with due_date in the past)
+
+    tasks_open = session.exec(select(func.count()).select_from(Task).where(Task.status == "open")).first() or 0
+    tasks_done = session.exec(select(func.count()).select_from(Task).where(Task.status == "done")).first() or 0
+
     today = date.today()
     tasks_overdue = session.exec(
-        select(func.count()).select_from(Task).where(
-            Task.status == "open",
-            Task.due_date.is_not(None),
-            Task.due_date < today
-        )
+        select(func.count()).select_from(Task).where(Task.status == "open", Task.due_date.is_not(None), Task.due_date < today)
     ).first() or 0
-    
-    storage_bytes = _get_storage_size()
-    
+
     return MetricsResponse(
         timestamp=datetime.utcnow().isoformat(),
         users_total=users_total,
@@ -180,33 +149,25 @@ def get_metrics(session: Session = Depends(get_session)) -> MetricsResponse:
         tasks_done=tasks_done,
         tasks_overdue=tasks_overdue,
         documents_total=documents_total,
-        storage_bytes=storage_bytes,
+        storage_bytes=_get_storage_size(),
     )
 
 
 @router.get("/status", response_model=SystemStatusResponse)
 def system_status() -> SystemStatusResponse:
-    """
-    System status dashboard endpoint.
-    
-    Returns comprehensive system information including:
-    - Application version and Python version
-    - Uptime in seconds
-    - Database and storage status
-    - Storage path and usage
-    """
+    """System status dashboard endpoint."""
     uptime = time.time() - _start_time
-    db_status = _check_database_health()
-    storage_status = _check_storage_health()
-    storage_bytes = _get_storage_size()
-    
+
     return SystemStatusResponse(
         timestamp=datetime.utcnow().isoformat(),
-        version="0.1.0",
+        version="0.2.0",
         python_version=platform.python_version(),
         uptime_seconds=round(uptime, 2),
-        database_status=db_status,
-        storage_status=storage_status,
+        database_status=_check_database_health(),
+        storage_status=_check_storage_health(),
         storage_path=str(Path(settings.upload_dir).absolute()),
-        storage_bytes=storage_bytes,
+        storage_bytes=_get_storage_size(),
     )
+
+
+router.include_router(reminders_router)
