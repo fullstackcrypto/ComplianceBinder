@@ -29,6 +29,15 @@ class Settings(BaseSettings):
 
     public_app_url: str = "http://localhost:8000"
 
+    reminder_cron_secret: str = ""
+    reminder_window_days: int = 7
+    reminder_from_email: str = "InspectionBinder <no-reply@inspectionbinder.local>"
+    mail_host: str = ""
+    mail_port: int = 587
+    mail_user: str = ""
+    mail_key: str = ""
+    mail_use_tls: bool = True
+
     def parsed_allowed_origins(self) -> List[str]:
         if self.allowed_origins.strip() == "*":
             return ["*"]
