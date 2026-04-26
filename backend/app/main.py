@@ -110,7 +110,7 @@ def _save_upload_with_limit(file: UploadFile, destination: Path) -> int:
 
 
 def _has_paid_access(user: User) -> bool:
-    return user.billing_status in {"active", "trialing"} or user.billing_plan in {"setup", "starter", "pro"}
+    return user.billing_status in {"active", "trialing"}
 
 
 def _apply_billing_update(
