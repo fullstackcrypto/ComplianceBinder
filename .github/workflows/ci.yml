@@ -14,9 +14,12 @@ jobs:
         working-directory: backend
     env:
       PYTHONPATH: .
+      ENV: ci
       DATABASE_URL: sqlite:///./compliancebinder_test.db
       UPLOAD_DIR: ./test_uploads
       SECRET_KEY: test-secret-key-for-ci-only
+      ALLOWED_ORIGINS: '*'
+      PUBLIC_APP_URL: http://localhost:8000
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -30,6 +33,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
+
+      - name: Validate non-deployed CI config
+        run: |
+          python scripts/validate_launch_config.py
 
       - name: Run Alembic migration check
         run: |
