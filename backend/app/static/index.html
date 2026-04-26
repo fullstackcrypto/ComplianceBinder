@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ComplianceBinder</title>
+    <title>InspectionBinder</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
     <div class="wrap">
       <header class="hero">
         <div>
-          <h1>ComplianceBinder</h1>
-          <p class="sub">Your checklist + documents, always inspection‑ready.</p>
+          <h1>InspectionBinder</h1>
+          <p class="sub">Inspection-ready digital binders for small operators.</p>
         </div>
         <div class="heroRight">
           <span class="pill">Private • Simple • Fast</span>
@@ -40,14 +40,28 @@
           <div class="whoBlock">
             <div class="who">Signed in as</div>
             <strong id="who"></strong>
+            <div id="billingStatus" class="meta"></div>
           </div>
           <div class="topActions">
             <button id="logoutBtn" class="secondary">Logout</button>
           </div>
         </div>
 
+        <section class="card">
+          <div class="binderHeader">
+            <div>
+              <h2>Plans</h2>
+              <div class="meta">Start with DIY access or use the done-with-you setup offer.</div>
+            </div>
+          </div>
+          <div class="row">
+            <button class="secondary" data-plan="starter">Starter — $19/mo</button>
+            <button class="secondary" data-plan="pro">Pro — $49/mo</button>
+            <button data-plan="setup">Done-With-You Setup — $299</button>
+          </div>
+        </section>
+
         <div class="layout">
-          <!-- Sidebar -->
           <aside class="sidebar card">
             <div class="sideHead">
               <h2>Binders</h2>
@@ -70,7 +84,6 @@
             <ul id="binderList" class="list"></ul>
           </aside>
 
-          <!-- Main -->
           <main class="main">
             <section class="card">
               <div class="binderHeader">
@@ -97,7 +110,7 @@
                     </div>
                     <div class="callout">
                       <div class="calloutTitle">Tip</div>
-                      <div class="calloutBody">Keep bulk files out of guest view. Store compliance docs here.</div>
+                      <div class="calloutBody">Use Assisted Living to auto-create a starter inspection checklist.</div>
                     </div>
                   </div>
                 </div>
@@ -124,21 +137,22 @@
                   <div class="dropzone" id="dropzone">
                     <div class="dropText">
                       <strong>Drag & drop</strong> a file here, or choose a file.
-                      <div class="meta">PDF, images, docs (stored privately)</div>
+                      <div class="meta">PDF, JPG, or PNG only. Max size is configured by the server.</div>
                     </div>
                   </div>
                   <div class="row">
                     <input id="docNote" placeholder="Note (optional)" />
-                    <input id="docFile" type="file" />
+                    <input id="docFile" type="file" accept="application/pdf,image/png,image/jpeg" />
                     <button id="uploadDocBtn">Upload</button>
                   </div>
                   <ul id="docList" class="list"></ul>
                 </div>
 
                 <div class="tabPanel hidden" id="tab-report">
-                  <p class="meta">A simple printable inspection‑ready summary.</p>
+                  <p class="meta">A printable inspection-ready summary. PDF export requires an active paid plan.</p>
                   <div class="row">
                     <button id="openReportBtn">Open report</button>
+                    <button id="downloadPdfBtn">Download PDF</button>
                     <button id="copyReportBtn" class="secondary">Copy HTML</button>
                   </div>
                 </div>
