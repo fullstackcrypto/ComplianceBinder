@@ -1,0 +1,23 @@
+name: Send reminder emails
+
+on:
+  schedule:
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-reminders:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call reminder endpoint
+        env:
+          STAGING_APP_URL: ${{ secrets.STAGING_APP_URL }}
+          REMINDER_CRON_SECRET: ${{ secrets.REMINDER_CRON_SECRET }}
+        run: |
+          if [ -z "$STAGING_APP_URL" ] || [ -z "$REMINDER_CRON_SECRET" ]; then
+            echo "Reminder secrets are not configured. Skipping."
+            exit 0
+          fi
+
+          curl -fsS -X POST "$STAGING_APP_URL/reminders/run" \
+            -H "X-Cron-Secret: $REMINDER_CRON_SECRET"
