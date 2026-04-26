@@ -17,6 +17,7 @@ Current first wedge: **assisted living / small care homes**.
 - Export a paid PDF inspection report
 - Start Stripe checkout for paid plans
 - Receive Stripe webhook updates to activate billing status
+- Send protected reminder emails for upcoming/overdue tasks
 - Monitor app health with `/health`, `/metrics`, and `/status`
 
 ## Local quick start
@@ -25,12 +26,23 @@ Current first wedge: **assisted living / small care homes**.
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+make install-dev
 cp .env.example .env
-uvicorn app.main:app --reload
+make migrate
+make run
 ```
 
 Open: http://localhost:8000
+
+Useful backend commands:
+
+```bash
+make install-dev      # install app, test, and migration dependencies
+make validate-launch # validate deployed environment variables
+make migrate         # run Alembic migrations
+make test            # run launch test suite
+make ci              # run install, config validation, migrations, and tests
+```
 
 First use:
 
@@ -73,6 +85,26 @@ Recommended Stripe events:
 - `customer.subscription.updated`
 - `customer.subscription.deleted`
 
+## Reminder setup
+
+The protected reminder endpoint is:
+
+```text
+POST /reminders/run
+```
+
+Required header:
+
+```text
+X-Cron-Secret: <REMINDER_CRON_SECRET>
+```
+
+The repo includes an optional scheduled GitHub Actions workflow:
+
+```text
+.github/workflows/reminders.yml
+```
+
 ## Production environment
 
 Set at minimum:
@@ -89,25 +121,25 @@ PUBLIC_APP_URL=https://your-domain.com
 Production notes:
 
 - Do not run production with `SECRET_KEY=CHANGE_ME_DEV_ONLY`.
+- Do not run staging/production with wildcard `ALLOWED_ORIGINS`.
 - Put the app behind HTTPS.
 - Use managed Postgres for serious customer volume.
 - Move uploads to S3-compatible storage before scaling beyond the first few customers.
 - Back up database and uploads daily.
-- Add a privacy policy and terms page before broad launch.
+- Review privacy and terms pages before broad launch.
 
-## Existing database caveat
+## Database and migrations
 
-Fresh deployments create the billing columns automatically through SQLModel metadata. Existing MVP databases created before this launch branch may need additive billing columns added manually before using billing endpoints.
+Local/dev/test environments can create tables automatically for convenience.
 
-Required `user` table columns:
+Staging and production must use Alembic:
 
-- `billing_plan`
-- `billing_status`
-- `stripe_customer_id`
-- `stripe_subscription_id`
-- `billing_updated_at`
+```bash
+cd backend
+make migrate
+```
 
-For a clean first launch, use a fresh database unless you intentionally migrate old local data.
+Render staging runs migration as a pre-deploy command through `render.yaml`.
 
 ## Security notes
 
@@ -116,6 +148,7 @@ For a clean first launch, use a fresh database unless you intentionally migrate 
 - Uploads are limited by size and MIME type.
 - Report HTML escapes user-provided values.
 - PDF export is gated behind active/trialing billing status.
+- Staging/production fail fast on unsafe origin/app URL settings.
 - This product organizes inspection documents; it does not provide legal or regulatory advice.
 
 ## Repo layout
@@ -131,10 +164,15 @@ ComplianceBinder/
       schemas.py
       templates.py
       static/
+    alembic/
+    scripts/
+    tests/
+    Makefile
     requirements.txt
+    requirements-dev.txt
     .env.example
   docs/
-  scripts/
+  render.yaml
 ```
 
 ## Monitoring
