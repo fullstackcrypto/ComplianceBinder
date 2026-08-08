@@ -3,23 +3,43 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>InspectionBinder</title>
+    <title>Ready Set Solutions | Assisted-Living Inspection Readiness</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
     <div class="wrap">
       <header class="hero">
         <div>
-          <h1>InspectionBinder</h1>
-          <p class="sub">Inspection-ready digital binders for small operators.</p>
+          <h1>Ready Set Solutions</h1>
+          <p class="sub">Arizona assisted-living inspection readiness, organized before the survey.</p>
         </div>
         <div class="heroRight">
-          <span class="pill">Private • Simple • Fast</span>
+          <span class="pill">Independent • Evidence-based • Actionable</span>
         </div>
       </header>
 
+      <section class="card">
+        <div class="binderHeader">
+          <div>
+            <h2>Ready Set Pilot — $299</h2>
+            <div class="meta">A paid, done-with-you readiness setup for one assisted-living facility using the working ComplianceBinder platform.</div>
+          </div>
+        </div>
+        <div class="callouts">
+          <div class="callout">
+            <div class="calloutTitle">What you receive</div>
+            <div class="calloutBody">A facility readiness binder, assisted-living checklist, evidence organization, corrective-action tracking, and a digital/printable readiness report.</div>
+          </div>
+          <div class="callout">
+            <div class="calloutTitle">How it works</div>
+            <div class="calloutBody">Your team can complete the workflow, or a Ready Set Readiness Specialist can support the walkthrough and report process.</div>
+          </div>
+        </div>
+        <p class="meta">Ready Set Solutions is not ADHS, does not conduct an official regulatory inspection, does not provide legal advice, and does not guarantee any survey outcome. Facility owners and licensees remain responsible for compliance.</p>
+      </section>
+
       <div id="auth" class="card">
-        <h2>Login</h2>
+        <h2>Customer Login / Pilot Account</h2>
         <div class="row">
           <label>Email</label>
           <input id="email" type="email" placeholder="you@example.com" />
@@ -30,7 +50,7 @@
         </div>
         <div class="buttons">
           <button id="loginBtn">Login</button>
-          <button id="registerBtn" class="secondary">Register</button>
+          <button id="registerBtn" class="secondary">Create Account</button>
         </div>
         <div id="authMsg" class="msg"></div>
       </div>
@@ -50,31 +70,31 @@
         <section class="card">
           <div class="binderHeader">
             <div>
-              <h2>Plans</h2>
-              <div class="meta">Start with DIY access or use the done-with-you setup offer.</div>
+              <h2>Ready Set Plans</h2>
+              <div class="meta">Start with the paid pilot or continue with recurring software access.</div>
             </div>
           </div>
           <div class="row">
             <button class="secondary" data-plan="starter">Starter — $19/mo</button>
             <button class="secondary" data-plan="pro">Pro — $49/mo</button>
-            <button data-plan="setup">Done-With-You Setup — $299</button>
+            <button data-plan="setup">Ready Set Pilot — $299</button>
           </div>
         </section>
 
         <div class="layout">
           <aside class="sidebar card">
             <div class="sideHead">
-              <h2>Binders</h2>
+              <h2>Facilities</h2>
               <input id="binderSearch" class="search" placeholder="Search…" />
             </div>
 
             <div class="row compact">
-              <input id="binderName" placeholder="New binder name" />
+              <input id="binderName" placeholder="Facility or binder name" />
             </div>
             <div class="row compact">
               <select id="binderIndustry">
+                <option value="assisted_living">Arizona Assisted Living</option>
                 <option value="general">General</option>
-                <option value="assisted_living">Assisted Living</option>
                 <option value="contractor">Contractor</option>
                 <option value="cleaning">Cleaning</option>
               </select>
@@ -88,7 +108,7 @@
             <section class="card">
               <div class="binderHeader">
                 <div>
-                  <h2 id="binderTitle">Select a binder</h2>
+                  <h2 id="binderTitle">Select a facility</h2>
                   <div id="binderMeta" class="meta"></div>
                 </div>
                 <div class="stats" id="stats" aria-live="polite"></div>
@@ -97,8 +117,8 @@
               <div id="binderActions" class="hidden">
                 <nav class="tabs" role="tablist">
                   <button class="tab active" data-tab="overview" role="tab">Overview</button>
-                  <button class="tab" data-tab="tasks" role="tab">Tasks</button>
-                  <button class="tab" data-tab="docs" role="tab">Documents</button>
+                  <button class="tab" data-tab="tasks" role="tab">Readiness Items</button>
+                  <button class="tab" data-tab="docs" role="tab">Evidence</button>
                   <button class="tab" data-tab="report" role="tab">Report</button>
                 </nav>
 
@@ -106,25 +126,25 @@
                   <div class="callouts">
                     <div class="callout">
                       <div class="calloutTitle">Next step</div>
-                      <div id="nextStep" class="calloutBody">Add a task or upload a document.</div>
+                      <div id="nextStep" class="calloutBody">Work the open readiness items and attach supporting evidence.</div>
                     </div>
                     <div class="callout">
-                      <div class="calloutTitle">Tip</div>
-                      <div class="calloutBody">Use Assisted Living to auto-create a starter inspection checklist.</div>
+                      <div class="calloutTitle">Pilot rule</div>
+                      <div class="calloutBody">Do not intentionally upload resident clinical records or PHI. Photograph conditions, not residents or resident-identifying information.</div>
                     </div>
                   </div>
                 </div>
 
                 <div class="tabPanel hidden" id="tab-tasks">
                   <div class="row">
-                    <input id="taskTitle" placeholder="New task title" />
+                    <input id="taskTitle" placeholder="New readiness item" />
                     <input id="taskDue" type="date" />
                     <button id="addTaskBtn">Add</button>
                   </div>
-                  <textarea id="taskDesc" placeholder="Task description (optional)"></textarea>
+                  <textarea id="taskDesc" placeholder="Finding, evidence, reference, corrective action, owner, or notes"></textarea>
 
                   <div class="row between">
-                    <h3>Tasks</h3>
+                    <h3>Readiness Items</h3>
                     <div class="seg">
                       <button class="segBtn active" data-filter="open">Open</button>
                       <button class="segBtn" data-filter="all">All</button>
@@ -136,12 +156,12 @@
                 <div class="tabPanel hidden" id="tab-docs">
                   <div class="dropzone" id="dropzone">
                     <div class="dropText">
-                      <strong>Drag & drop</strong> a file here, or choose a file.
-                      <div class="meta">PDF, JPG, or PNG only. Max size is configured by the server.</div>
+                      <strong>Drag & drop</strong> authorized evidence here, or choose a file.
+                      <div class="meta">PDF, JPG, or PNG only. Avoid unnecessary sensitive resident information during the pilot.</div>
                     </div>
                   </div>
                   <div class="row">
-                    <input id="docNote" placeholder="Note (optional)" />
+                    <input id="docNote" placeholder="Location / evidence note" />
                     <input id="docFile" type="file" accept="application/pdf,image/png,image/jpeg" />
                     <button id="uploadDocBtn">Upload</button>
                   </div>
@@ -149,7 +169,8 @@
                 </div>
 
                 <div class="tabPanel hidden" id="tab-report">
-                  <p class="meta">A printable inspection-ready summary. PDF export requires an active paid plan.</p>
+                  <p class="meta">Generate the facility readiness summary after reviewing open findings and evidence. PDF export requires an active paid plan.</p>
+                  <p class="meta"><strong>Important:</strong> Regulatory citations must be verified against the current official source before a customer-facing final report is treated as complete.</p>
                   <div class="row">
                     <button id="openReportBtn">Open report</button>
                     <button id="downloadPdfBtn">Download PDF</button>
