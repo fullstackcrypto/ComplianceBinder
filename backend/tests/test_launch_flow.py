@@ -59,8 +59,10 @@ def test_assisted_living_binder_seeds_template_tasks() -> None:
     tasks = client.get(f"/binders/{binder_id}/tasks", headers=headers)
     assert tasks.status_code == 200
     titles = [task["title"] for task in tasks.json()]
-    assert "Business license and operating permit" in titles
-    assert "Medication log review" in titles
+    assert len(titles) >= 16
+    assert "[ADMIN] Facility license and scope review" in titles
+    assert "[OPERATIONS] Medication/documentation readiness location check" in titles
+    assert "[REPORT] Final rule-reference and evidence QA" in titles
 
 
 def test_report_html_escapes_user_content() -> None:
@@ -132,4 +134,11 @@ def test_static_legal_pages_exist() -> None:
     for path in ["/privacy.html", "/terms.html"]:
         response = client.get(path)
         assert response.status_code == 200
-        assert "InspectionBinder" in response.text
+        assert "Ready Set Solutions" in response.text
+
+
+def test_home_page_exposes_ready_set_pilot() -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Ready Set Solutions" in response.text
+    assert "Ready Set Pilot" in response.text
