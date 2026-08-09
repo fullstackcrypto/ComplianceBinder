@@ -342,12 +342,17 @@ function setTab(tabName) {
   document.getElementById(`tab-${tabName}`)?.classList.remove('hidden');
 }
 
+function prepareReportHtml(html) {
+  const stylesheet = `<link rel="stylesheet" href="${window.location.origin}/report.css">`;
+  return html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/i, stylesheet);
+}
+
 async function openReport() {
   const html = await apiFetch(`/binders/${currentBinderId}/report`, { headers: authHeaders() });
   const w = window.open('', '_blank');
   if (!w) return toast('Report window was blocked by the browser', true);
   w.document.open();
-  w.document.write(html);
+  w.document.write(prepareReportHtml(html));
   w.document.close();
 }
 
@@ -370,7 +375,7 @@ async function downloadPdfReport() {
 
 async function copyReportHtml() {
   const html = await apiFetch(`/binders/${currentBinderId}/report`, { headers: authHeaders() });
-  await navigator.clipboard.writeText(html);
+  await navigator.clipboard.writeText(prepareReportHtml(html));
   toast('Report HTML copied');
 }
 
