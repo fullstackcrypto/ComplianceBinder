@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     mail_user: str = ""
     mail_key: str = ""
     mail_use_tls: bool = True
+    mail_use_ssl: bool = False
 
     def parsed_allowed_origins(self) -> List[str]:
         if self.allowed_origins.strip() == "*":
@@ -81,3 +82,5 @@ if settings.restricted_environment:
         raise RuntimeError("Set PUBLIC_APP_URL to the deployed app URL outside development.")
     if not settings.monitoring_secret or len(settings.monitoring_secret) < 32:
         raise RuntimeError("Set a strong MONITORING_SECRET outside development.")
+    if settings.mail_use_tls and settings.mail_use_ssl:
+        raise RuntimeError("Configure either SMTP STARTTLS or implicit SSL, not both.")
