@@ -18,6 +18,7 @@ from app.models import User
 
 
 init_db()
+Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
 client = TestClient(app)
 
 
