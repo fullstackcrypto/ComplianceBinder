@@ -14,7 +14,7 @@ class Token(BaseModel):
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=12, max_length=72)
 
     @field_validator("password")
     @classmethod
@@ -25,8 +25,8 @@ class UserCreate(BaseModel):
 
 
 class BinderCreate(BaseModel):
-    name: str
-    industry: str = "general"
+    name: str = Field(min_length=1, max_length=160)
+    industry: str = Field(default="general", min_length=1, max_length=80)
 
 
 class BinderOut(BaseModel):
@@ -37,8 +37,8 @@ class BinderOut(BaseModel):
 
 
 class TaskCreate(BaseModel):
-    title: str
-    description: str = ""
+    title: str = Field(min_length=1, max_length=240)
+    description: str = Field(default="", max_length=4000)
     due_date: Optional[date] = None
 
 

@@ -1,7 +1,7 @@
 const API = '';
-let token = localStorage.getItem('cb_token') || '';
+let token = sessionStorage.getItem('cb_token') || '';
 let currentBinderId = null;
-let currentEmail = localStorage.getItem('cb_email') || '';
+let currentEmail = sessionStorage.getItem('cb_email') || '';
 
 let allBinders = [];
 let allTasks = [];
@@ -99,8 +99,8 @@ async function login() {
     });
     token = data.access_token;
     currentEmail = email;
-    localStorage.setItem('cb_token', token);
-    localStorage.setItem('cb_email', currentEmail);
+    sessionStorage.setItem('cb_token', token);
+    sessionStorage.setItem('cb_email', currentEmail);
     showApp();
     toast('Signed in');
     await Promise.all([refreshBillingStatus(), refreshBinders()]);
@@ -330,8 +330,9 @@ async function uploadDoc() {
 function logout() {
   token = '';
   currentBinderId = null;
-  localStorage.removeItem('cb_token');
-  localStorage.removeItem('cb_email');
+  currentEmail = '';
+  sessionStorage.removeItem('cb_token');
+  sessionStorage.removeItem('cb_email');
   showAuth();
 }
 
@@ -362,7 +363,7 @@ async function downloadPdfReport() {
   const url = URL.createObjectURL(blob);
   const tmp = document.createElement('a');
   tmp.href = url;
-  tmp.download = `inspection-report-${currentBinderId}.pdf`;
+  tmp.download = `readiness-report-${currentBinderId}.pdf`;
   tmp.click();
   URL.revokeObjectURL(url);
 }

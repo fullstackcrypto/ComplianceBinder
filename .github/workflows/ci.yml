@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, security/launch-hardening]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   backend-tests:
@@ -17,32 +20,37 @@ jobs:
       ENV: ci
       DATABASE_URL: sqlite:///./compliancebinder_test.db
       UPLOAD_DIR: ./test_uploads
-      SECRET_KEY: test-secret-key-for-ci-only
+      SECRET_KEY: test-secret-key-for-ci-only-and-never-production
       ALLOWED_ORIGINS: '*'
       PUBLIC_APP_URL: http://localhost:8000
+      MONITORING_SECRET: ci-monitoring-secret-only-not-for-production
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
-
+          python -m pip check
+      - name: Compile Python
+        run: python -m compileall -q app tests scripts
+      - name: Static security scan
+        run: bandit -r app -q -x app/static
+      - name: Dependency vulnerability audit
+        run: pip-audit -r requirements.txt
       - name: Validate non-deployed CI config
-        run: |
-          python scripts/validate_launch_config.py
-
+        run: python scripts/validate_launch_config.py
       - name: Run Alembic migration check
         run: |
           rm -f compliancebinder_test.db
           python -m alembic upgrade head
-
       - name: Run tests
-        run: |
-          python -m pytest -q
+        run: python -m pytest -q

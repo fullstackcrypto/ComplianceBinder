@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+import secrets
 from typing import List
+from urllib.parse import urlparse
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Central configuration for ComplianceBinder."""
+    """Central configuration for Ready Set Solutions ComplianceBinder."""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     env: str = "dev"
-    secret_key: str = "CHANGE_ME_DEV_ONLY"
-    access_token_expire_minutes: int = 60 * 24 * 7
+    # Development receives an ephemeral cryptographically random key. Deployed
+    # environments must supply SECRET_KEY explicitly and pass validation below.
+    secret_key: str = Field(default_factory=lambda: secrets.token_urlsafe(48))
+    access_token_expire_minutes: int = 60 * 12
 
     database_url: str = "sqlite:///./compliancebinder.db"
     upload_dir: str = "./uploads"
@@ -29,9 +34,13 @@ class Settings(BaseSettings):
 
     public_app_url: str = "http://localhost:8000"
 
+    monitoring_secret: str = ""
+    auth_rate_limit_attempts: int = 20
+    auth_rate_limit_window_seconds: int = 300
+
     reminder_cron_secret: str = ""
     reminder_window_days: int = 7
-    reminder_from_email: str = "InspectionBinder <no-reply@inspectionbinder.local>"
+    reminder_from_email: str = "Ready Set Solutions <no-reply@charleysllc.com>"
     mail_host: str = ""
     mail_port: int = 587
     mail_user: str = ""
@@ -46,15 +55,29 @@ class Settings(BaseSettings):
     def parsed_allowed_content_types(self) -> set[str]:
         return {item.strip().lower() for item in self.allowed_content_types.split(",") if item.strip()}
 
+    @property
+    def restricted_environment(self) -> bool:
+        return self.env.lower() in {"prod", "production", "staging"}
+
+    @property
+    def production_environment(self) -> bool:
+        return self.env.lower() in {"prod", "production"}
+
+    @property
+    def public_app_scheme(self) -> str:
+        return urlparse(self.public_app_url).scheme.lower()
+
 
 settings = Settings()
 
-_RESTRICTED_ENVS = {"prod", "production", "staging"}
-
-if settings.env.lower() in _RESTRICTED_ENVS:
-    if settings.secret_key == "CHANGE_ME_DEV_ONLY":
-        raise RuntimeError("Set a strong signing key before running outside development.")
+if settings.restricted_environment:
+    if "SECRET_KEY" not in settings.model_fields_set or len(settings.secret_key) < 32:
+        raise RuntimeError("Set a strong explicit signing key before running outside development.")
     if settings.allowed_origins.strip() == "*":
         raise RuntimeError("Set ALLOWED_ORIGINS to the deployed app origin outside development.")
+    if settings.public_app_scheme != "https":
+        raise RuntimeError("PUBLIC_APP_URL must use HTTPS outside development.")
     if "localhost" in settings.public_app_url or "127.0.0.1" in settings.public_app_url:
         raise RuntimeError("Set PUBLIC_APP_URL to the deployed app URL outside development.")
+    if not settings.monitoring_secret or len(settings.monitoring_secret) < 32:
+        raise RuntimeError("Set a strong MONITORING_SECRET outside development.")
