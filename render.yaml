@@ -1,38 +1,43 @@
 services:
   - type: web
-    name: inspectionbinder-staging
+    name: ready-set-compliancebinder
     runtime: python
     plan: starter
+    region: oregon
+    branch: main
+    autoDeployTrigger: checksPass
     rootDir: backend
-    buildCommand: pip install -r requirements-dev.txt
+    buildCommand: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
     preDeployCommand: python scripts/validate_launch_config.py && alembic upgrade head
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-server-header
     healthCheckPath: /health
+    domains:
+      - app.charleysllc.com
     disk:
-      name: inspectionbinder-staging-uploads
+      name: ready-set-compliancebinder-uploads
       mountPath: /var/data
-      sizeGB: 1
+      sizeGB: 5
     envVars:
       - key: ENV
-        value: staging
+        value: production
       - key: PYTHON_VERSION
-        value: 3.11.9
+        value: 3.11.15
       - key: SECRET_KEY
-        sync: false
+        generateValue: true
       - key: DATABASE_URL
         fromDatabase:
-          name: inspectionbinder-staging-db
+          name: ready-set-compliancebinder-db
           property: connectionString
       - key: UPLOAD_DIR
         value: /var/data/uploads
       - key: ALLOWED_ORIGINS
-        sync: false
+        value: https://app.charleysllc.com
       - key: PUBLIC_APP_URL
-        sync: false
+        value: https://app.charleysllc.com
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "720"
       - key: MONITORING_SECRET
-        sync: false
+        generateValue: true
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
@@ -44,13 +49,13 @@ services:
       - key: STRIPE_PRICE_SETUP
         sync: false
       - key: REMINDER_CRON_SECRET
-        sync: false
+        generateValue: true
       - key: REMINDER_WINDOW_DAYS
         value: "7"
       - key: REMINDER_FROM_EMAIL
         sync: false
       - key: MAIL_HOST
-        sync: false
+        value: mail.privateemail.com
       - key: MAIL_PORT
         value: "587"
       - key: MAIL_USER
@@ -59,7 +64,37 @@ services:
         sync: false
       - key: MAIL_USE_TLS
         value: "true"
+      - key: MAIL_USE_SSL
+        value: "false"
+
+  - type: cron
+    name: ready-set-reminders
+    runtime: python
+    plan: starter
+    region: oregon
+    branch: main
+    autoDeployTrigger: checksPass
+    rootDir: backend
+    schedule: "0 16 * * *"
+    buildCommand: echo "Ready Set reminder cron uses Python standard library only"
+    startCommand: python scripts/run_reminder_cron.py
+    envVars:
+      - key: PUBLIC_APP_URL
+        fromService:
+          type: web
+          name: ready-set-compliancebinder
+          envVarKey: PUBLIC_APP_URL
+      - key: REMINDER_CRON_SECRET
+        fromService:
+          type: web
+          name: ready-set-compliancebinder
+          envVarKey: REMINDER_CRON_SECRET
 
 databases:
-  - name: inspectionbinder-staging-db
-    plan: starter
+  - name: ready-set-compliancebinder-db
+    plan: basic-256mb
+    region: oregon
+    postgresMajorVersion: "18"
+    diskSizeGB: 15
+    storageAutoscalingEnabled: true
+    ipAllowList: []

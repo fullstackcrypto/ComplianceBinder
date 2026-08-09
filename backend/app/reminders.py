@@ -27,9 +27,8 @@ def run_reminders(
 ) -> dict:
     """Send reminder emails for overdue and upcoming open tasks.
 
-    Intended for an external cron provider. The job is protected by the
-    X-Cron-Secret header so it can be called from services like GitHub Actions,
-    cron-job.org, Render Cron Jobs, or Better Stack.
+    Intended for an external scheduler. The job is protected by the
+    X-Cron-Secret header and the production Render Blueprint runs it daily.
     """
     _authorize_reminder_job(x_cron_secret)
 
@@ -60,14 +59,14 @@ def run_reminders(
             continue
 
         due_label = "overdue" if task.due_date and task.due_date < today else "upcoming"
-        subject = f"InspectionBinder reminder: {task.title}"
+        subject = f"Ready Set Solutions reminder: {task.title}"
         body = (
             f"Task: {task.title}\n"
             f"Binder: {binder.name}\n"
             f"Status: {due_label}\n"
             f"Due date: {task.due_date}\n\n"
-            "Open InspectionBinder and update the task or upload supporting documentation.\n\n"
-            "This is an organizational reminder, not legal or regulatory advice."
+            "Open Ready Set Solutions ComplianceBinder and update the task or upload supporting documentation.\n\n"
+            "This is an organizational readiness reminder, not legal or regulatory advice."
         )
 
         try:
