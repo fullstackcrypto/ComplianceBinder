@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from hmac import compare_digest
 from typing import Callable
 
@@ -41,21 +41,30 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 class AuthRateLimiter:
-    """Small in-process brake for credential stuffing on a single application instance."""
+    """Bounded in-process brake for credential stuffing on one application instance."""
 
     def __init__(self) -> None:
-        self._events: dict[str, deque[float]] = defaultdict(deque)
+        self._events: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = threading.Lock()
 
     def check(self, request: Request, bucket: str) -> None:
         now = time.monotonic()
         window = max(30, settings.auth_rate_limit_window_seconds)
         max_attempts = max(5, settings.auth_rate_limit_attempts)
+        max_clients = max(128, settings.auth_rate_limit_max_clients)
         client = request.client.host if request.client else "unknown"
         key = f"{bucket}:{client}"
 
         with self._lock:
-            events = self._events[key]
+            events = self._events.get(key)
+            if events is None:
+                if len(self._events) >= max_clients:
+                    self._events.popitem(last=False)
+                events = deque()
+                self._events[key] = events
+            else:
+                self._events.move_to_end(key)
+
             while events and now - events[0] > window:
                 events.popleft()
             if len(events) >= max_attempts:
