@@ -1,8 +1,8 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from jose import jwt
+import jwt
 from passlib.context import CryptContext
 
 from .config import settings
@@ -35,7 +35,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def create_access_token(subject: str, expires_minutes: Optional[int] = None) -> str:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expire = now + timedelta(minutes=expires_minutes or settings.access_token_expire_minutes)
     to_encode: dict[str, Any] = {
         "sub": subject,
@@ -55,4 +55,5 @@ def decode_token(token: str) -> dict[str, Any]:
         algorithms=["HS256"],
         audience=JWT_AUDIENCE,
         issuer=JWT_ISSUER,
+        options={"require": ["exp", "iat", "jti", "iss", "aud", "sub"]},
     )
