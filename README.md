@@ -37,13 +37,14 @@ For customers that want the full current software workflow, paid reporting, remi
 - Create facility binders
 - Auto-seed an Assisted Living readiness checklist
 - Track inspection, renewal, maintenance, training, and documentation tasks
-- Upload PDF/JPG/PNG evidence with size and type limits
-- Generate a safe HTML inspection-readiness report
+- Upload PDF/JPG/PNG evidence with size, extension, and file-signature validation
+- Generate an escaped HTML inspection-readiness report
 - Export a paid PDF report
 - Start Stripe checkout for paid plans
-- Receive Stripe webhook updates to activate billing status
+- Receive signed Stripe webhook updates to activate billing status
 - Send protected reminder emails for upcoming/overdue tasks
-- Monitor app health with `/health`, `/metrics`, and `/status`
+- Expose a minimal public `/health` endpoint
+- Protect detailed `/metrics` and `/status` endpoints with a monitoring secret
 
 ## Positioning
 
@@ -111,7 +112,7 @@ The current code uses three Stripe price keys:
 - `Pro` — `$49/month`
 - `Ready Set Pilot / Done-With-You Setup` — `$299 one-time`
 
-Set:
+Set secrets only in the hosting provider's encrypted environment-variable system:
 
 ```env
 STRIPE_SECRET_KEY=sk_live_or_test_key
@@ -119,7 +120,7 @@ STRIPE_WEBHOOK_SECRET=whsec_your_secret
 STRIPE_PRICE_STARTER=price_...
 STRIPE_PRICE_PRO=price_...
 STRIPE_PRICE_SETUP=price_...
-PUBLIC_APP_URL=https://your-domain.com
+PUBLIC_APP_URL=https://app.charleysllc.com
 ```
 
 Webhook endpoint:
@@ -131,8 +132,11 @@ POST /billing/webhook
 Recommended Stripe events:
 
 - `checkout.session.completed`
+- `checkout.session.async_payment_succeeded`
+- `checkout.session.async_payment_failed`
 - `customer.subscription.updated`
 - `customer.subscription.deleted`
+- `invoice.payment_failed`
 
 ## Reminder setup
 
@@ -156,24 +160,43 @@ Optional scheduled workflow:
 
 ## Production environment
 
+The intended production application origin is:
+
+```text
+https://app.charleysllc.com
+```
+
 Set at minimum:
 
 ```env
 ENV=production
-SECRET_KEY=<strong-random-secret>
+SECRET_KEY=<at-least-32-character-random-signing-secret>
+ACCESS_TOKEN_EXPIRE_MINUTES=720
 DATABASE_URL=<managed-postgres-url>
 UPLOAD_DIR=/var/lib/compliancebinder/uploads
-ALLOWED_ORIGINS=https://your-domain.com
-PUBLIC_APP_URL=https://your-domain.com
+ALLOWED_ORIGINS=https://app.charleysllc.com
+PUBLIC_APP_URL=https://app.charleysllc.com
+MONITORING_SECRET=<at-least-32-character-random-secret>
+REMINDER_CRON_SECRET=<at-least-32-character-random-secret>
+STRIPE_SECRET_KEY=<encrypted-host-secret>
+STRIPE_WEBHOOK_SECRET=<encrypted-host-secret>
+STRIPE_PRICE_STARTER=price_...
+STRIPE_PRICE_PRO=price_...
+STRIPE_PRICE_SETUP=price_...
 ```
+
+For production reminder email, also configure the mailbox/SMTP values through encrypted host secrets. Do not commit mailbox passwords, Stripe secret keys, webhook secrets, signing keys, database credentials, recovery codes, or hosting credentials to GitHub.
 
 Production rules:
 
-- Never use `SECRET_KEY=CHANGE_ME_DEV_ONLY` in production.
+- Use a unique random `SECRET_KEY` and `MONITORING_SECRET` of at least 32 characters.
 - Never use wildcard `ALLOWED_ORIGINS` in staging/production.
 - Require HTTPS.
+- API docs/OpenAPI are disabled outside development.
 - Use managed Postgres for customer data.
-- Move uploads to S3-compatible/object storage before material customer scale.
+- Run the application container as a non-root user.
+- Keep detailed monitoring behind `X-Monitoring-Secret`; expose only the minimal public health response.
+- Use durable uploads and move to S3-compatible/object storage before material customer scale.
 - Back up database and uploads daily and test restore procedures.
 - Do not intentionally store resident clinical records/PHI during the initial pilot phase.
 - Avoid photographing residents or resident-identifying information during field walkthroughs.
@@ -197,12 +220,20 @@ LiDAR and computer vision are future evidence tools, not launch requirements and
 
 ## Security notes
 
-- Passwords are hashed with bcrypt.
-- Auth uses JWT bearer tokens.
-- Uploads are limited by size and MIME type.
-- Report HTML escapes user-provided values.
+- Passwords are hashed with bcrypt and bounded to bcrypt-safe input length.
+- Authentication uses signed JWT bearer tokens with issuer, audience, expiry, issued-at, subject, and unique token ID validation.
+- Browser auth state is session-scoped rather than persisted in `localStorage`.
+- Authentication endpoints include a bounded in-process abuse brake; production infrastructure should also provide edge/WAF rate limiting.
+- Customer email values in audit logs are replaced with keyed pseudonymous HMAC fingerprints.
+- Uploads are limited by size and allowed MIME type, checked against filename extension and file signature, stored under random server-generated names, and created with restrictive permissions.
+- Existing uploads are never deleted on a random filename collision.
+- Report HTML escapes user-provided values and sensitive responses use `Cache-Control: no-store`.
+- Detailed monitoring is secret-protected and does not expose storage filesystem paths.
+- Production adds restrictive browser security headers and HSTS.
+- The Docker runtime uses a non-root user and does not bake `.env` into the image.
+- CI runs compilation, Bandit static analysis, `pip-audit`, SQLite and PostgreSQL migrations, pytest regression tests, a Docker build, non-root verification, and a production-mode container smoke test.
 - PDF export is gated behind active/trialing billing status.
-- Staging/production fail fast on unsafe origin/app URL settings.
+- Staging/production fail fast on unsafe origin/app URL/signing/monitoring settings.
 - The product organizes readiness information; it does not provide legal or regulatory advice.
 
 ## Repo layout
