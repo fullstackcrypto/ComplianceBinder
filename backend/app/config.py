@@ -14,8 +14,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     env: str = "dev"
-    # Development receives an ephemeral cryptographically random key. Deployed
-    # environments must supply SECRET_KEY explicitly and pass validation below.
     secret_key: str = Field(default_factory=lambda: secrets.token_urlsafe(48))
     access_token_expire_minutes: int = 60 * 12
 
@@ -37,6 +35,7 @@ class Settings(BaseSettings):
     monitoring_secret: str = ""
     auth_rate_limit_attempts: int = 20
     auth_rate_limit_window_seconds: int = 300
+    auth_rate_limit_max_clients: int = 4096
 
     reminder_cron_secret: str = ""
     reminder_window_days: int = 7
@@ -71,7 +70,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 if settings.restricted_environment:
-    if "SECRET_KEY" not in settings.model_fields_set or len(settings.secret_key) < 32:
+    if "secret_key" not in settings.model_fields_set or len(settings.secret_key) < 32:
         raise RuntimeError("Set a strong explicit signing key before running outside development.")
     if settings.allowed_origins.strip() == "*":
         raise RuntimeError("Set ALLOWED_ORIGINS to the deployed app origin outside development.")
