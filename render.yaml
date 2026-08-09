@@ -21,7 +21,7 @@ services:
       - key: ENV
         value: production
       - key: PYTHON_VERSION
-        value: 3.11.9
+        value: 3.11.15
       - key: SECRET_KEY
         generateValue: true
       - key: DATABASE_URL
