@@ -1,2 +1,3 @@
-10109	INFO	(Modern Web Application - informational classification, not a vulnerability)
-90005	INFO	(Sec-Fetch-Dest is browser-generated request metadata; ZAP/curl requests are not browser navigations)
+10049	INFO	(Intentional Cache-Control no-store policy for the launch application and customer data origin)
+10109	INFO	(Modern Web Application is an informational classification, not a vulnerability)
+90005	INFO	(Sec-Fetch-Dest is browser-generated request metadata; ZAP requests are not browser navigations)
