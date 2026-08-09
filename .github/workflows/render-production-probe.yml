@@ -32,24 +32,16 @@ jobs:
         shell: bash
         run: |
           set +x
-          auth=(-H "Accept: application/json" -H "Authorization: Bearer $RENDER_API_KEY")
-
           request() {
-            local url="$1"
-            local out="$2"
-            local code
-            code=$(curl --silent --show-error "${auth[@]}" -o "$out" -w '%{http_code}' "$url")
+            url="$1"
+            out="$2"
+            code=$(curl --silent --show-error \
+              -H "Accept: application/json" \
+              -H "Authorization: Bearer $RENDER_API_KEY" \
+              -o "$out" -w '%{http_code}' "$url")
             if [ "$code" != "200" ]; then
-              echo "::error::Render API request failed with HTTP $code for $url"
-              python - <<'PY' "$out"
-import json, sys
-p = sys.argv[1]
-try:
-    data = json.load(open(p, encoding='utf-8'))
-    print({k: v for k, v in data.items() if k in {'message', 'status', 'error'}} if isinstance(data, dict) else 'Render API returned a non-success response')
-except Exception:
-    print('Render API returned a non-success response')
-PY
+              echo "::error::Render API request failed with HTTP $code"
+              jq '{message, status, error}' "$out" 2>/dev/null || true
               exit 1
             fi
           }
@@ -59,50 +51,19 @@ PY
           request "https://api.render.com/v1/postgres?ownerId=$RENDER_WORKSPACE_ID&limit=100" /tmp/postgres.json
           request "https://api.render.com/v1/blueprints?ownerId=$RENDER_WORKSPACE_ID&limit=100" /tmp/blueprints.json
 
-          python - <<'PY'
-import json
+          echo "READY_SET_WEB_SERVICE_COUNT=$(jq 'length' /tmp/services.json)"
+          jq -c '.[] | (.service // .) | {id, name, type, branch, suspended, url: (.serviceDetails.url // .url // null)}' /tmp/services.json
 
-def rows(path, key=None):
-    data = json.load(open(path, encoding='utf-8'))
-    out = []
-    for item in data if isinstance(data, list) else []:
-        obj = item.get(key, item) if isinstance(item, dict) and key else item
-        if isinstance(obj, dict):
-            out.append(obj)
-    return out
+          echo "READY_SET_CRON_COUNT=$(jq 'length' /tmp/cron.json)"
+          jq -c '.[] | (.service // .) | {id, name, type, branch}' /tmp/cron.json
 
-services = rows('/tmp/services.json', 'service')
-cron = rows('/tmp/cron.json', 'service')
-postgres = rows('/tmp/postgres.json', 'postgres')
-blueprints = rows('/tmp/blueprints.json', 'blueprint')
+          echo "READY_SET_POSTGRES_COUNT=$(jq '[.[] | (.postgres // .) | select(.name == "ready-set-compliancebinder-db")] | length' /tmp/postgres.json)"
+          jq -c '.[] | (.postgres // .) | select(.name == "ready-set-compliancebinder-db") | {id, name, status, plan, region}' /tmp/postgres.json
 
-print(f"READY_SET_WEB_SERVICE_COUNT={len(services)}")
-for s in services:
-    details = s.get('serviceDetails') or {}
-    print('WEB_SERVICE', {
-        'id': s.get('id'),
-        'name': s.get('name'),
-        'type': s.get('type'),
-        'branch': s.get('branch'),
-        'url': details.get('url') or s.get('url'),
-        'suspended': s.get('suspended'),
-    })
+          echo "BLUEPRINT_COUNT=$(jq 'length' /tmp/blueprints.json)"
+          jq -c '.[] | (.blueprint // .) | {id, name, autoSync, path}' /tmp/blueprints.json
 
-print(f"READY_SET_CRON_COUNT={len(cron)}")
-for s in cron:
-    print('CRON_SERVICE', {'id': s.get('id'), 'name': s.get('name'), 'type': s.get('type'), 'branch': s.get('branch')})
-
-matching_db = [p for p in postgres if p.get('name') == 'ready-set-compliancebinder-db']
-print(f"READY_SET_POSTGRES_COUNT={len(matching_db)}")
-for p in matching_db:
-    print('POSTGRES', {'id': p.get('id'), 'name': p.get('name'), 'status': p.get('status'), 'plan': p.get('plan'), 'region': p.get('region')})
-
-print(f"BLUEPRINT_COUNT={len(blueprints)}")
-for b in blueprints:
-    print('BLUEPRINT', {'id': b.get('id'), 'name': b.get('name'), 'autoSync': b.get('autoSync'), 'path': b.get('path')})
-PY
-
-      - name: Validate production Blueprint against the authenticated workspace
+      - name: Validate production Blueprint against authenticated workspace
         shell: bash
         run: |
           set +x
@@ -117,15 +78,8 @@ PY
             https://api.render.com/v1/blueprints/validate)
           if [ "$code" != "200" ]; then
             echo "::error::Render Blueprint validation API returned HTTP $code"
+            jq '{message, status, error, errors}' /tmp/blueprint-validation.json 2>/dev/null || true
             exit 1
           fi
-          python - <<'PY'
-import json
-x = json.load(open('/tmp/blueprint-validation.json', encoding='utf-8'))
-print('BLUEPRINT_VALID=', x.get('valid'))
-if not x.get('valid', False):
-    print('BLUEPRINT_ERRORS=', x.get('errors') or x.get('error') or 'validation failed')
-    raise SystemExit(1)
-plan = x.get('plan') or x.get('changes') or []
-print('BLUEPRINT_PLAN_AVAILABLE=', bool(plan))
-PY
+          jq '{valid, errors, hasPlan: ((.plan // .changes // []) | length > 0)}' /tmp/blueprint-validation.json
+          jq -e '.valid == true' /tmp/blueprint-validation.json >/dev/null
