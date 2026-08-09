@@ -227,3 +227,9 @@ def test_home_page_exposes_ready_set_pilot() -> None:
     assert response.status_code == 200
     assert "Ready Set Solutions" in response.text
     assert "Ready Set Pilot" in response.text
+
+
+def test_frontend_uses_session_scoped_auth_storage() -> None:
+    app_js = (BACKEND_ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "localStorage" not in app_js
+    assert "sessionStorage" in app_js
