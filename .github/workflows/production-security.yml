@@ -1,0 +1,48 @@
+name: Production Security Baseline
+
+on:
+  schedule:
+    - cron: '7 9 * * 6'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    env:
+      TARGET: ${{ secrets.PRODUCTION_APP_URL }}
+    steps:
+      - name: Skip until production URL is configured
+        id: preflight
+        shell: bash
+        run: |
+          if [ -z "$TARGET" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "PRODUCTION_APP_URL is not configured; production scan skipped."
+          else
+            case "$TARGET" in
+              https://*) ;;
+              *) echo "PRODUCTION_APP_URL must use HTTPS" >&2; exit 1 ;;
+            esac
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify public security surface
+        if: steps.preflight.outputs.configured == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location "$TARGET/health" >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$TARGET/openapi.json")" = "404"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$TARGET/status")" = "401"
+          HEADERS="$(curl --silent --show-error --head "$TARGET/")"
+          printf '%s\n' "$HEADERS" | grep -qi '^strict-transport-security:'
+          printf '%s\n' "$HEADERS" | grep -qi '^content-security-policy:'
+          printf '%s\n' "$HEADERS" | grep -qi '^x-content-type-options: nosniff'
+      - name: Run OWASP ZAP passive baseline
+        if: steps.preflight.outputs.configured == 'true'
+        shell: bash
+        run: |
+          docker run --rm -t ghcr.io/zaproxy/zaproxy:2.17.0 \
+            zap-baseline.py -t "$TARGET" -m 1 -I
