@@ -114,29 +114,56 @@ jobs:
 
       - name: Run production-mode container smoke test
         run: |
-          docker run -d --rm \
+          docker rm -f ready-set-ci >/dev/null 2>&1 || true
+          docker run -d \
             --name ready-set-ci \
-            --add-host=host.docker.internal:host-gateway \
-            -p 18000:8000 \
+            --network host \
             -e ENV=production \
             -e SECRET_KEY=ci-production-signing-key-0123456789-abcdefghijklmnopqrstuvwxyz \
-            -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/readyset_ci \
+            -e DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/readyset_ci \
             -e UPLOAD_DIR=/tmp/readyset-uploads \
             -e ALLOWED_ORIGINS=https://app.charleysllc.com \
             -e PUBLIC_APP_URL=https://app.charleysllc.com \
             -e MONITORING_SECRET=ci-production-monitoring-secret-0123456789-abcdefghijklmnopqrstuvwxyz \
+            -e REMINDER_CRON_SECRET=ci-production-reminder-secret-0123456789-abcdefghijklmnopqrstuvwxyz \
+            -e STRIPE_SECRET_KEY=sk_live_ci_placeholder_not_a_real_key \
+            -e STRIPE_WEBHOOK_SECRET=whsec_ci_placeholder_not_a_real_secret \
+            -e STRIPE_PRICE_STARTER=price_ci_starter \
+            -e STRIPE_PRICE_PRO=price_ci_pro \
+            -e STRIPE_PRICE_SETUP=price_ci_setup \
+            -e REMINDER_FROM_EMAIL='Ready Set Solutions <no-reply@charleysllc.com>' \
+            -e MAIL_HOST=mail.privateemail.com \
+            -e MAIL_USER=no-reply@charleysllc.com \
+            -e MAIL_KEY=ci-placeholder-not-a-real-mail-password \
             ready-set-ci
-          trap 'docker rm -f ready-set-ci >/dev/null 2>&1 || true' EXIT
+
+          cleanup() {
+            docker logs ready-set-ci > /tmp/readyset-container.log 2>&1 || true
+            docker rm -f ready-set-ci >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
 
           ready=0
           for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:18000/health >/tmp/readyset-health.json; then
+            if ! docker inspect ready-set-ci >/dev/null 2>&1; then
+              echo "Container disappeared before becoming healthy"
+              cat /tmp/readyset-container.log 2>/dev/null || true
+              exit 1
+            fi
+            state="$(docker inspect -f '{{.State.Status}}' ready-set-ci)"
+            if [ "$state" = "exited" ] || [ "$state" = "dead" ]; then
+              echo "Container exited before becoming healthy"
+              docker logs ready-set-ci
+              exit 1
+            fi
+            if curl -fsS http://127.0.0.1:8000/health >/tmp/readyset-health.json; then
               ready=1
               break
             fi
             sleep 1
           done
           if [ "$ready" != "1" ]; then
+            echo "Container did not become healthy"
             docker logs ready-set-ci
             exit 1
           fi
@@ -144,13 +171,13 @@ jobs:
           grep -q '"status":"healthy"' /tmp/readyset-health.json
           test "$(docker exec ready-set-ci id -u)" != "0"
 
-          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/docs)" = "404"
-          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/openapi.json)" = "404"
-          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/status)" = "401"
-          test "$(curl -sS -o /tmp/readyset-status.json -w '%{http_code}' -H 'X-Monitoring-Secret: ci-production-monitoring-secret-0123456789-abcdefghijklmnopqrstuvwxyz' http://127.0.0.1:18000/status)" = "200"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/docs)" = "404"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/openapi.json)" = "404"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/status)" = "401"
+          test "$(curl -sS -o /tmp/readyset-status.json -w '%{http_code}' -H 'X-Monitoring-Secret: ci-production-monitoring-secret-0123456789-abcdefghijklmnopqrstuvwxyz' http://127.0.0.1:8000/status)" = "200"
           ! grep -q 'storage_path' /tmp/readyset-status.json
 
-          curl -fsS -D /tmp/readyset-headers.txt -o /dev/null http://127.0.0.1:18000/health
+          curl -fsS -D /tmp/readyset-headers.txt -o /dev/null http://127.0.0.1:8000/health
           grep -qi '^x-content-type-options: nosniff' /tmp/readyset-headers.txt
           grep -qi '^x-frame-options: DENY' /tmp/readyset-headers.txt
           grep -qi '^strict-transport-security: max-age=31536000; includeSubDomains' /tmp/readyset-headers.txt
