@@ -82,7 +82,7 @@ jobs:
           RESTORE_DIR="$RUNNER_TEMP/readyset-restored-uploads"
           mkdir -p "$LIVE_DIR" "$RESTORE_DIR"
           sudo chown -R "$APP_UID:$APP_GID" "$LIVE_DIR" "$RESTORE_DIR"
-          chmod 700 "$LIVE_DIR" "$RESTORE_DIR"
+          sudo chmod 700 "$LIVE_DIR" "$RESTORE_DIR"
           echo "APP_UID=$APP_UID" >> "$GITHUB_ENV"
           echo "APP_GID=$APP_GID" >> "$GITHUB_ENV"
           echo "LIVE_DIR=$LIVE_DIR" >> "$GITHUB_ENV"
@@ -179,7 +179,9 @@ jobs:
             ready-set-deep
 
           for attempt in $(seq 1 30); do
-            curl -fsS http://127.0.0.1:8000/health >/dev/null && break
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+              break
+            fi
             sleep 1
           done
 
@@ -195,14 +197,14 @@ jobs:
         run: |
           docker run --rm --network host -e PGPASSWORD=postgres postgres:16-alpine \
             pg_dump -h 127.0.0.1 -U postgres -Fc readyset_ci > /tmp/readyset-db.dump
-          tar -C "$LIVE_DIR" -czf /tmp/readyset-uploads.tar.gz .
+          sudo tar -C "$LIVE_DIR" -czf /tmp/readyset-uploads.tar.gz .
           test -s /tmp/readyset-db.dump
           test -s /tmp/readyset-uploads.tar.gz
 
       - name: Deliberately remove live evidence and restore to fresh database/storage
         run: |
           docker rm -f ready-set-deep
-          rm -rf "$LIVE_DIR"
+          sudo rm -rf "$LIVE_DIR"
 
           docker run --rm --network host -e PGPASSWORD=postgres postgres:16-alpine \
             psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 \
@@ -212,11 +214,11 @@ jobs:
           docker run --rm -i --network host -e PGPASSWORD=postgres postgres:16-alpine \
             pg_restore -h 127.0.0.1 -U postgres -d readyset_restore --no-owner --no-privileges < /tmp/readyset-db.dump
 
-          rm -rf "$RESTORE_DIR"
+          sudo rm -rf "$RESTORE_DIR"
           mkdir -p "$RESTORE_DIR"
           tar -C "$RESTORE_DIR" -xzf /tmp/readyset-uploads.tar.gz
           sudo chown -R "$APP_UID:$APP_GID" "$RESTORE_DIR"
-          chmod 700 "$RESTORE_DIR"
+          sudo chmod 700 "$RESTORE_DIR"
 
       - name: Boot restored system and prove evidence recovery
         run: |
@@ -234,7 +236,9 @@ jobs:
             ready-set-deep
 
           for attempt in $(seq 1 30); do
-            curl -fsS http://127.0.0.1:8000/health >/dev/null && break
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+              break
+            fi
             sleep 1
           done
 
