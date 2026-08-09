@@ -47,7 +47,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # operational content on one origin. Prefer confidentiality and a
         # deterministic security posture over browser/proxy caching. Static
         # asset versioning can later re-enable immutable caching safely.
-        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
         return response
