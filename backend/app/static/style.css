@@ -72,6 +72,7 @@ h1 { margin: 0 0 4px; }
 
 .row.compact { margin: 8px 0; }
 .row.between { justify-content: space-between; }
+.row.task-row { margin: 0; gap: 8px; }
 
 label { color: var(--muted); font-size: 14px; }
 
@@ -113,6 +114,7 @@ button.secondary {
 }
 
 .msg { margin-top: 8px; color: var(--muted); }
+.msg.msg-error { color: var(--danger); }
 
 .hidden { display: none; }
 
@@ -136,6 +138,7 @@ button.secondary {
 }
 
 .list li .meta { color: var(--muted); font-size: 12px; }
+.list li.binder-item { cursor: pointer; }
 
 .topbar {
   display: flex;
@@ -297,6 +300,10 @@ button.secondary {
   border-radius: 12px;
   box-shadow: var(--shadow);
   max-width: 92vw;
+}
+
+.toast.toast-error {
+  border-color: rgba(255, 90, 106, 0.45);
 }
 
 a { color: var(--accent); }
