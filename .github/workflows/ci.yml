@@ -12,6 +12,20 @@ permissions:
 jobs:
   backend-tests:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: readyset_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d readyset_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
     defaults:
       run:
         working-directory: backend
@@ -27,6 +41,7 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -35,22 +50,108 @@ jobs:
           cache-dependency-path: |
             backend/requirements.txt
             backend/requirements-dev.txt
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
           python -m pip check
+
       - name: Compile Python
         run: python -m compileall -q app tests scripts
+
       - name: Static security scan
         run: bandit -r app -q -x app/static
+
       - name: Dependency vulnerability audit
         run: pip-audit -r requirements.txt
+
       - name: Validate non-deployed CI config
         run: python scripts/validate_launch_config.py
-      - name: Run Alembic migration check
+
+      - name: Simulate production launch config
+        env:
+          ENV: production
+          SECRET_KEY: ci-production-signing-key-0123456789-abcdefghijklmnopqrstuvwxyz
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/readyset_ci
+          UPLOAD_DIR: /var/data/uploads
+          ALLOWED_ORIGINS: https://app.charleysllc.com
+          PUBLIC_APP_URL: https://app.charleysllc.com
+          MONITORING_SECRET: ci-production-monitoring-secret-0123456789-abcdefghijklmnopqrstuvwxyz
+          REMINDER_CRON_SECRET: ci-production-reminder-secret-0123456789-abcdefghijklmnopqrstuvwxyz
+          STRIPE_SECRET_KEY: sk_live_ci_placeholder_not_a_real_key
+          STRIPE_WEBHOOK_SECRET: whsec_ci_placeholder_not_a_real_secret
+          STRIPE_PRICE_STARTER: price_ci_starter
+          STRIPE_PRICE_PRO: price_ci_pro
+          STRIPE_PRICE_SETUP: price_ci_setup
+          REMINDER_FROM_EMAIL: Ready Set Solutions <no-reply@charleysllc.com>
+          MAIL_HOST: mail.privateemail.com
+          MAIL_USER: no-reply@charleysllc.com
+          MAIL_KEY: ci-placeholder-not-a-real-mail-password
+        run: python scripts/validate_launch_config.py
+
+      - name: Run SQLite Alembic migration check
         run: |
           rm -f compliancebinder_test.db
           python -m alembic upgrade head
+
+      - name: Run PostgreSQL Alembic migration check
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/readyset_ci
+        run: python -m alembic upgrade head
+
       - name: Run tests
         run: python -m pytest -q
+
+      - name: Build production container
+        run: docker build --pull -t ready-set-ci .
+
+      - name: Verify non-root container user
+        run: |
+          uid="$(docker run --rm --entrypoint id ready-set-ci -u)"
+          echo "container uid=$uid"
+          test "$uid" != "0"
+
+      - name: Run production-mode container smoke test
+        run: |
+          docker run -d --rm \
+            --name ready-set-ci \
+            --add-host=host.docker.internal:host-gateway \
+            -p 18000:8000 \
+            -e ENV=production \
+            -e SECRET_KEY=ci-production-signing-key-0123456789-abcdefghijklmnopqrstuvwxyz \
+            -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/readyset_ci \
+            -e UPLOAD_DIR=/tmp/readyset-uploads \
+            -e ALLOWED_ORIGINS=https://app.charleysllc.com \
+            -e PUBLIC_APP_URL=https://app.charleysllc.com \
+            -e MONITORING_SECRET=ci-production-monitoring-secret-0123456789-abcdefghijklmnopqrstuvwxyz \
+            ready-set-ci
+          trap 'docker rm -f ready-set-ci >/dev/null 2>&1 || true' EXIT
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18000/health >/tmp/readyset-health.json; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != "1" ]; then
+            docker logs ready-set-ci
+            exit 1
+          fi
+
+          grep -q '"status":"healthy"' /tmp/readyset-health.json
+          test "$(docker exec ready-set-ci id -u)" != "0"
+
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/docs)" = "404"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/openapi.json)" = "404"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:18000/status)" = "401"
+          test "$(curl -sS -o /tmp/readyset-status.json -w '%{http_code}' -H 'X-Monitoring-Secret: ci-production-monitoring-secret-0123456789-abcdefghijklmnopqrstuvwxyz' http://127.0.0.1:18000/status)" = "200"
+          ! grep -q 'storage_path' /tmp/readyset-status.json
+
+          curl -fsS -D /tmp/readyset-headers.txt -o /dev/null http://127.0.0.1:18000/health
+          grep -qi '^x-content-type-options: nosniff' /tmp/readyset-headers.txt
+          grep -qi '^x-frame-options: DENY' /tmp/readyset-headers.txt
+          grep -qi '^strict-transport-security: max-age=31536000; includeSubDomains' /tmp/readyset-headers.txt
+          grep -qi '^content-security-policy:' /tmp/readyset-headers.txt
