@@ -1,0 +1,117 @@
+name: Browser E2E
+
+on:
+  push:
+    branches: [main, security/launch-hardening]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chromium-customer-flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: readyset_browser
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d readyset_browser"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install backend dependencies and migrate PostgreSQL
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/readyset_browser
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip check
+          python -m alembic upgrade head
+
+      - name: Build production application image
+        working-directory: backend
+        run: docker build --pull -t ready-set-browser .
+
+      - name: Prepare browser-test evidence storage
+        run: |
+          APP_UID="$(docker run --rm --entrypoint id ready-set-browser -u)"
+          APP_GID="$(docker run --rm --entrypoint id ready-set-browser -g)"
+          UPLOAD_DIR="$RUNNER_TEMP/readyset-browser-uploads"
+          mkdir -p "$UPLOAD_DIR"
+          sudo chown -R "$APP_UID:$APP_GID" "$UPLOAD_DIR"
+          sudo chmod 700 "$UPLOAD_DIR"
+          echo "UPLOAD_DIR=$UPLOAD_DIR" >> "$GITHUB_ENV"
+
+      - name: Start production-mode application
+        run: |
+          docker rm -f ready-set-browser >/dev/null 2>&1 || true
+          docker run -d \
+            --name ready-set-browser \
+            --network host \
+            -v "$UPLOAD_DIR:/data/uploads" \
+            -e ENV=production \
+            -e SECRET_KEY=browser-ci-signing-key-0123456789-abcdefghijklmnopqrstuvwxyz \
+            -e DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/readyset_browser \
+            -e UPLOAD_DIR=/data/uploads \
+            -e ALLOWED_ORIGINS=https://app.charleysllc.com \
+            -e PUBLIC_APP_URL=https://app.charleysllc.com \
+            -e MONITORING_SECRET=browser-ci-monitoring-secret-0123456789-abcdefghijklmnopqrstuvwxyz \
+            ready-set-browser
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Status}}' ready-set-browser 2>/dev/null || true)" = "exited" ]; then
+              docker logs ready-set-browser
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs ready-set-browser
+          exit 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pinned Playwright Chromium
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.62.1
+          npx playwright install --with-deps chromium
+
+      - name: Run real-browser customer journey
+        env:
+          BASE_URL: http://127.0.0.1:8000
+          TEST_EMAIL: browser-e2e-${{ github.run_id }}@example.com
+          TEST_PASSWORD: browser-e2e-password-2026
+        run: node browser-tests/ready-set-e2e.js
+
+      - name: Cleanup browser-test application
+        if: always()
+        run: |
+          docker logs ready-set-browser > /tmp/readyset-browser.log 2>&1 || true
+          docker rm -f ready-set-browser >/dev/null 2>&1 || true
