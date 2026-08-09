@@ -343,8 +343,14 @@ function setTab(tabName) {
 }
 
 function prepareReportHtml(html) {
-  const stylesheet = `<link rel="stylesheet" href="${window.location.origin}/report.css">`;
-  return html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/i, stylesheet);
+  return html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/i, '');
+}
+
+function attachReportStylesheet(doc) {
+  const link = doc.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/report.css';
+  doc.head.appendChild(link);
 }
 
 async function openReport() {
@@ -354,6 +360,7 @@ async function openReport() {
   w.document.open();
   w.document.write(prepareReportHtml(html));
   w.document.close();
+  attachReportStylesheet(w.document);
 }
 
 async function downloadPdfReport() {
@@ -375,7 +382,7 @@ async function downloadPdfReport() {
 
 async function copyReportHtml() {
   const html = await apiFetch(`/binders/${currentBinderId}/report`, { headers: authHeaders() });
-  await navigator.clipboard.writeText(prepareReportHtml(html));
+  await navigator.clipboard.writeText(html);
   toast('Report HTML copied');
 }
 
