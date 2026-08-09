@@ -1,0 +1,131 @@
+name: Render Production Probe
+
+on:
+  push:
+    branches: [ops/render-production-probe]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-render-production:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_WORKSPACE_ID: ${{ secrets.RENDER_WORKSPACE_ID }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Confirm Render credentials are configured
+        shell: bash
+        run: |
+          set +x
+          if [ -z "$RENDER_API_KEY" ] || [ -z "$RENDER_WORKSPACE_ID" ]; then
+            echo "::error::RENDER_API_KEY and/or RENDER_WORKSPACE_ID are not configured in GitHub Actions secrets."
+            exit 2
+          fi
+          echo "Render credentials are present; secret values remain masked."
+
+      - name: Authenticate and inventory production resources
+        shell: bash
+        run: |
+          set +x
+          auth=(-H "Accept: application/json" -H "Authorization: Bearer $RENDER_API_KEY")
+
+          request() {
+            local url="$1"
+            local out="$2"
+            local code
+            code=$(curl --silent --show-error "${auth[@]}" -o "$out" -w '%{http_code}' "$url")
+            if [ "$code" != "200" ]; then
+              echo "::error::Render API request failed with HTTP $code for $url"
+              python - <<'PY' "$out"
+import json, sys
+p = sys.argv[1]
+try:
+    data = json.load(open(p, encoding='utf-8'))
+    print({k: v for k, v in data.items() if k in {'message', 'status', 'error'}} if isinstance(data, dict) else 'Render API returned a non-success response')
+except Exception:
+    print('Render API returned a non-success response')
+PY
+              exit 1
+            fi
+          }
+
+          request "https://api.render.com/v1/services?ownerId=$RENDER_WORKSPACE_ID&name=ready-set-compliancebinder&limit=100" /tmp/services.json
+          request "https://api.render.com/v1/services?ownerId=$RENDER_WORKSPACE_ID&name=ready-set-reminders&limit=100" /tmp/cron.json
+          request "https://api.render.com/v1/postgres?ownerId=$RENDER_WORKSPACE_ID&limit=100" /tmp/postgres.json
+          request "https://api.render.com/v1/blueprints?ownerId=$RENDER_WORKSPACE_ID&limit=100" /tmp/blueprints.json
+
+          python - <<'PY'
+import json
+
+def rows(path, key=None):
+    data = json.load(open(path, encoding='utf-8'))
+    out = []
+    for item in data if isinstance(data, list) else []:
+        obj = item.get(key, item) if isinstance(item, dict) and key else item
+        if isinstance(obj, dict):
+            out.append(obj)
+    return out
+
+services = rows('/tmp/services.json', 'service')
+cron = rows('/tmp/cron.json', 'service')
+postgres = rows('/tmp/postgres.json', 'postgres')
+blueprints = rows('/tmp/blueprints.json', 'blueprint')
+
+print(f"READY_SET_WEB_SERVICE_COUNT={len(services)}")
+for s in services:
+    details = s.get('serviceDetails') or {}
+    print('WEB_SERVICE', {
+        'id': s.get('id'),
+        'name': s.get('name'),
+        'type': s.get('type'),
+        'branch': s.get('branch'),
+        'url': details.get('url') or s.get('url'),
+        'suspended': s.get('suspended'),
+    })
+
+print(f"READY_SET_CRON_COUNT={len(cron)}")
+for s in cron:
+    print('CRON_SERVICE', {'id': s.get('id'), 'name': s.get('name'), 'type': s.get('type'), 'branch': s.get('branch')})
+
+matching_db = [p for p in postgres if p.get('name') == 'ready-set-compliancebinder-db']
+print(f"READY_SET_POSTGRES_COUNT={len(matching_db)}")
+for p in matching_db:
+    print('POSTGRES', {'id': p.get('id'), 'name': p.get('name'), 'status': p.get('status'), 'plan': p.get('plan'), 'region': p.get('region')})
+
+print(f"BLUEPRINT_COUNT={len(blueprints)}")
+for b in blueprints:
+    print('BLUEPRINT', {'id': b.get('id'), 'name': b.get('name'), 'autoSync': b.get('autoSync'), 'path': b.get('path')})
+PY
+
+      - name: Validate production Blueprint against the authenticated workspace
+        shell: bash
+        run: |
+          set +x
+          code=$(curl --silent --show-error \
+            -H "Accept: application/json" \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -X POST \
+            -F "ownerId=$RENDER_WORKSPACE_ID" \
+            -F "file=@render.yaml;type=application/yaml" \
+            -o /tmp/blueprint-validation.json \
+            -w '%{http_code}' \
+            https://api.render.com/v1/blueprints/validate)
+          if [ "$code" != "200" ]; then
+            echo "::error::Render Blueprint validation API returned HTTP $code"
+            exit 1
+          fi
+          python - <<'PY'
+import json
+x = json.load(open('/tmp/blueprint-validation.json', encoding='utf-8'))
+print('BLUEPRINT_VALID=', x.get('valid'))
+if not x.get('valid', False):
+    print('BLUEPRINT_ERRORS=', x.get('errors') or x.get('error') or 'validation failed')
+    raise SystemExit(1)
+plan = x.get('plan') or x.get('changes') or []
+print('BLUEPRINT_PLAN_AVAILABLE=', bool(plan))
+PY
