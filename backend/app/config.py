@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import secrets
 from typing import List
 from urllib.parse import urlparse
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,7 +14,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     env: str = "dev"
-    secret_key: str = "CHANGE_ME_DEV_ONLY"
+    # Development receives an ephemeral cryptographically random key. Deployed
+    # environments must supply SECRET_KEY explicitly and pass validation below.
+    secret_key: str = Field(default_factory=lambda: secrets.token_urlsafe(48))
     access_token_expire_minutes: int = 60 * 12
 
     database_url: str = "sqlite:///./compliancebinder.db"
@@ -67,8 +71,8 @@ class Settings(BaseSettings):
 settings = Settings()
 
 if settings.restricted_environment:
-    if settings.secret_key == "CHANGE_ME_DEV_ONLY" or len(settings.secret_key) < 32:
-        raise RuntimeError("Set a strong signing key before running outside development.")
+    if "SECRET_KEY" not in settings.model_fields_set or len(settings.secret_key) < 32:
+        raise RuntimeError("Set a strong explicit signing key before running outside development.")
     if settings.allowed_origins.strip() == "*":
         raise RuntimeError("Set ALLOWED_ORIGINS to the deployed app origin outside development.")
     if settings.public_app_scheme != "https":
