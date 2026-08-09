@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     monitoring_secret: str = ""
     auth_rate_limit_attempts: int = 20
     auth_rate_limit_window_seconds: int = 300
+    auth_rate_limit_max_clients: int = 4096
 
     reminder_cron_secret: str = ""
     reminder_window_days: int = 7
@@ -72,7 +73,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 if settings.restricted_environment:
-    if "SECRET_KEY" not in settings.model_fields_set or len(settings.secret_key) < 32:
+    if "secret_key" not in settings.model_fields_set or len(settings.secret_key) < 32:
         raise RuntimeError("Set a strong explicit signing key before running outside development.")
     if settings.allowed_origins.strip() == "*":
         raise RuntimeError("Set ALLOWED_ORIGINS to the deployed app origin outside development.")
