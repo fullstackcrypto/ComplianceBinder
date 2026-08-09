@@ -26,7 +26,7 @@ const els = {
 function toast(msg, isError = false) {
   const t = els.toast();
   t.textContent = msg;
-  t.style.borderColor = isError ? 'rgba(255, 90, 106, 0.45)' : 'var(--border)';
+  t.classList.toggle('toast-error', isError);
   t.classList.remove('hidden');
   clearTimeout(toast._timer);
   toast._timer = setTimeout(() => t.classList.add('hidden'), 3000);
@@ -34,7 +34,7 @@ function toast(msg, isError = false) {
 
 function setMsg(el, msg, isError=false) {
   el.textContent = msg;
-  el.style.color = isError ? 'var(--danger)' : 'var(--muted)';
+  el.classList.toggle('msg-error', isError);
 }
 
 function authHeaders() {
@@ -156,9 +156,8 @@ function renderBinders() {
 
   filtered.forEach(b => {
     const li = document.createElement('li');
-    li.className = b.id === currentBinderId ? 'selected' : '';
+    li.className = b.id === currentBinderId ? 'selected binder-item' : 'binder-item';
     li.innerHTML = `<div><strong>${escapeHtml(b.name)}</strong> <span class="meta">(${escapeHtml(b.industry)})</span></div>`;
-    li.style.cursor = 'pointer';
     li.onclick = () => selectBinder(b.id, b.name, b.industry);
     list.appendChild(li);
   });
@@ -219,7 +218,7 @@ function renderTasks() {
     const done = t.status === 'done';
     const overdueIcon = t.is_overdue ? 'Overdue: ' : '';
     li.innerHTML = `
-      <div class="row between" style="margin:0; gap: 8px;">
+      <div class="row between task-row">
         <div>
           <strong>${done ? 'Done: ' : 'Open: '} ${overdueIcon}${escapeHtml(t.title)}</strong>
           <span class="meta">${escapeHtml(due)}</span>
@@ -346,6 +345,7 @@ function setTab(tabName) {
 async function openReport() {
   const html = await apiFetch(`/binders/${currentBinderId}/report`, { headers: authHeaders() });
   const w = window.open('', '_blank');
+  if (!w) return toast('Report window was blocked by the browser', true);
   w.document.open();
   w.document.write(html);
   w.document.close();
