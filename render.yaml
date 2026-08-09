@@ -6,7 +6,7 @@ services:
     rootDir: backend
     buildCommand: pip install -r requirements-dev.txt
     preDeployCommand: python scripts/validate_launch_config.py && alembic upgrade head
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --no-server-header
     healthCheckPath: /health
     disk:
       name: inspectionbinder-staging-uploads
@@ -28,6 +28,10 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
       - key: PUBLIC_APP_URL
+        sync: false
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "720"
+      - key: MONITORING_SECRET
         sync: false
       - key: STRIPE_SECRET_KEY
         sync: false
