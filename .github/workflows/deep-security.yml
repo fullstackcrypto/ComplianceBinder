@@ -1,0 +1,267 @@
+name: Deep Security
+
+on:
+  push:
+    branches: [main, security/launch-hardening]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 12 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secret-history-scan:
+    name: Full-history secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full Git history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository history with Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  data-survivability-and-dast:
+    name: Evidence persistence, restore, and DAST
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: readyset_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d readyset_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install migration/runtime dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip check
+
+      - name: Migrate PostgreSQL test database
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/readyset_ci
+        run: python -m alembic upgrade head
+
+      - name: Build production image
+        working-directory: backend
+        run: docker build --pull -t ready-set-deep .
+
+      - name: Prepare persistent evidence storage
+        run: |
+          APP_UID="$(docker run --rm --entrypoint id ready-set-deep -u)"
+          APP_GID="$(docker run --rm --entrypoint id ready-set-deep -g)"
+          LIVE_DIR="$RUNNER_TEMP/readyset-live-uploads"
+          RESTORE_DIR="$RUNNER_TEMP/readyset-restored-uploads"
+          mkdir -p "$LIVE_DIR" "$RESTORE_DIR"
+          sudo chown -R "$APP_UID:$APP_GID" "$LIVE_DIR" "$RESTORE_DIR"
+          sudo chmod 700 "$LIVE_DIR" "$RESTORE_DIR"
+          echo "APP_UID=$APP_UID" >> "$GITHUB_ENV"
+          echo "APP_GID=$APP_GID" >> "$GITHUB_ENV"
+          echo "LIVE_DIR=$LIVE_DIR" >> "$GITHUB_ENV"
+          echo "RESTORE_DIR=$RESTORE_DIR" >> "$GITHUB_ENV"
+
+      - name: Start production-mode application with persistent storage
+        run: |
+          docker rm -f ready-set-deep >/dev/null 2>&1 || true
+          docker run -d \
+            --name ready-set-deep \
+            --network host \
+            -v "$LIVE_DIR:/data/uploads" \
+            -e ENV=production \
+            -e SECRET_KEY=deep-ci-signing-key-0123456789-abcdefghijklmnopqrstuvwxyz \
+            -e DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/readyset_ci \
+            -e UPLOAD_DIR=/data/uploads \
+            -e ALLOWED_ORIGINS=https://app.charleysllc.com \
+            -e PUBLIC_APP_URL=https://app.charleysllc.com \
+            -e MONITORING_SECRET=deep-ci-monitoring-secret-0123456789-abcdefghijklmnopqrstuvwxyz \
+            ready-set-deep
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health >/tmp/deep-health.json; then
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Status}}' ready-set-deep 2>/dev/null || true)" = "exited" ]; then
+              docker logs ready-set-deep
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs ready-set-deep
+          exit 1
+
+      - name: Create customer, binder, and evidence through the live API
+        run: |
+          cat > /tmp/evidence.pdf <<'EOF'
+          %PDF-1.4
+          1 0 obj
+          << /Type /Catalog >>
+          endobj
+          %%EOF
+          EOF
+          ORIGINAL_HASH="$(sha256sum /tmp/evidence.pdf | awk '{print $1}')"
+          EMAIL="deep-security-${GITHUB_RUN_ID}@example.com"
+          PASSWORD='deep-security-password-2026'
+
+          curl -fsS -X POST http://127.0.0.1:8000/auth/register \
+            -H 'Content-Type: application/json' \
+            --data "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\"}" >/tmp/register.json
+
+          TOKEN="$(curl -fsS -X POST http://127.0.0.1:8000/auth/token \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "username=$EMAIL" \
+            --data-urlencode "password=$PASSWORD" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+
+          BINDER_ID="$(curl -fsS -X POST http://127.0.0.1:8000/binders \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data '{"name":"Deep Security Recovery Facility","industry":"assisted_living"}' | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+
+          curl -fsS -X POST "http://127.0.0.1:8000/binders/$BINDER_ID/documents" \
+            -H "Authorization: Bearer $TOKEN" \
+            -F 'file=@/tmp/evidence.pdf;type=application/pdf' \
+            -F 'note=deep security persistence test' >/tmp/upload.json
+
+          DOC_ID="$(curl -fsS "http://127.0.0.1:8000/binders/$BINDER_ID/documents" \
+            -H "Authorization: Bearer $TOKEN" | python -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')"
+
+          curl -fsS "http://127.0.0.1:8000/documents/$DOC_ID/download" \
+            -H "Authorization: Bearer $TOKEN" -o /tmp/download-before.pdf
+          test "$(sha256sum /tmp/download-before.pdf | awk '{print $1}')" = "$ORIGINAL_HASH"
+
+          echo "RECOVERY_EMAIL=$EMAIL" >> "$GITHUB_ENV"
+          echo "RECOVERY_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          echo "RECOVERY_BINDER_ID=$BINDER_ID" >> "$GITHUB_ENV"
+          echo "RECOVERY_DOC_ID=$DOC_ID" >> "$GITHUB_ENV"
+          echo "RECOVERY_HASH=$ORIGINAL_HASH" >> "$GITHUB_ENV"
+
+      - name: Verify evidence survives an application restart
+        run: |
+          docker rm -f ready-set-deep
+          docker run -d \
+            --name ready-set-deep \
+            --network host \
+            -v "$LIVE_DIR:/data/uploads" \
+            -e ENV=production \
+            -e SECRET_KEY=deep-ci-signing-key-0123456789-abcdefghijklmnopqrstuvwxyz \
+            -e DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/readyset_ci \
+            -e UPLOAD_DIR=/data/uploads \
+            -e ALLOWED_ORIGINS=https://app.charleysllc.com \
+            -e PUBLIC_APP_URL=https://app.charleysllc.com \
+            -e MONITORING_SECRET=deep-ci-monitoring-secret-0123456789-abcdefghijklmnopqrstuvwxyz \
+            ready-set-deep
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          TOKEN="$(curl -fsS -X POST http://127.0.0.1:8000/auth/token \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "username=$RECOVERY_EMAIL" \
+            --data-urlencode "password=$RECOVERY_PASSWORD" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+          curl -fsS "http://127.0.0.1:8000/documents/$RECOVERY_DOC_ID/download" \
+            -H "Authorization: Bearer $TOKEN" -o /tmp/download-after-restart.pdf
+          test "$(sha256sum /tmp/download-after-restart.pdf | awk '{print $1}')" = "$RECOVERY_HASH"
+
+      - name: Back up database and evidence storage
+        run: |
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:16-alpine \
+            pg_dump -h 127.0.0.1 -U postgres -Fc readyset_ci > /tmp/readyset-db.dump
+          sudo tar -C "$LIVE_DIR" -czf /tmp/readyset-uploads.tar.gz .
+          test -s /tmp/readyset-db.dump
+          test -s /tmp/readyset-uploads.tar.gz
+
+      - name: Deliberately remove live evidence and restore to fresh database/storage
+        run: |
+          docker rm -f ready-set-deep
+          sudo rm -rf "$LIVE_DIR"
+
+          docker run --rm --network host -e PGPASSWORD=postgres postgres:16-alpine \
+            psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c 'DROP DATABASE IF EXISTS readyset_restore;' \
+            -c 'CREATE DATABASE readyset_restore;'
+
+          docker run --rm -i --network host -e PGPASSWORD=postgres postgres:16-alpine \
+            pg_restore -h 127.0.0.1 -U postgres -d readyset_restore --no-owner --no-privileges < /tmp/readyset-db.dump
+
+          sudo rm -rf "$RESTORE_DIR"
+          mkdir -p "$RESTORE_DIR"
+          tar -C "$RESTORE_DIR" -xzf /tmp/readyset-uploads.tar.gz
+          sudo chown -R "$APP_UID:$APP_GID" "$RESTORE_DIR"
+          sudo chmod 700 "$RESTORE_DIR"
+
+      - name: Boot restored system and prove evidence recovery
+        run: |
+          docker run -d \
+            --name ready-set-deep \
+            --network host \
+            -v "$RESTORE_DIR:/data/uploads" \
+            -e ENV=production \
+            -e SECRET_KEY=deep-ci-signing-key-0123456789-abcdefghijklmnopqrstuvwxyz \
+            -e DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/readyset_restore \
+            -e UPLOAD_DIR=/data/uploads \
+            -e ALLOWED_ORIGINS=https://app.charleysllc.com \
+            -e PUBLIC_APP_URL=https://app.charleysllc.com \
+            -e MONITORING_SECRET=deep-ci-monitoring-secret-0123456789-abcdefghijklmnopqrstuvwxyz \
+            ready-set-deep
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          TOKEN="$(curl -fsS -X POST http://127.0.0.1:8000/auth/token \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "username=$RECOVERY_EMAIL" \
+            --data-urlencode "password=$RECOVERY_PASSWORD" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+          curl -fsS "http://127.0.0.1:8000/documents/$RECOVERY_DOC_ID/download" \
+            -H "Authorization: Bearer $TOKEN" -o /tmp/download-restored.pdf
+          test "$(sha256sum /tmp/download-restored.pdf | awk '{print $1}')" = "$RECOVERY_HASH"
+
+      - name: OWASP ZAP baseline scan against restored production-mode service
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25
+        with:
+          target: 'http://127.0.0.1:8000'
+          docker_name: 'ghcr.io/zaproxy/zaproxy:2.17.0'
+          fail_action: true
+          allow_issue_writing: false
+          artifact_name: ready-set-zap-baseline
+          cmd_options: '-a -c .zap/rules.tsv'
+
+      - name: Cleanup test containers
+        if: always()
+        run: |
+          docker logs ready-set-deep > /tmp/readyset-deep.log 2>&1 || true
+          docker rm -f ready-set-deep >/dev/null 2>&1 || true

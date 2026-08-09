@@ -1,6 +1,7 @@
 """Privacy-preserving logging and request tracing for ComplianceBinder."""
 
 import hashlib
+import hmac
 import logging
 import sys
 import time
@@ -12,15 +13,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from .config import settings
+
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 
 
 def _identity_fingerprint(value: str) -> str:
-    """Return a stable, non-reversible short identifier for audit correlation."""
+    """Return a keyed pseudonymous identifier for audit correlation."""
     if not value:
         return "-"
-    return hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()[:12]
+    normalized = value.strip().lower().encode("utf-8")
+    key = settings.secret_key.encode("utf-8")
+    return hmac.new(key, normalized, hashlib.sha256).hexdigest()[:12]
 
 
 class RequestIdFilter(logging.Filter):

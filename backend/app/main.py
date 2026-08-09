@@ -29,8 +29,20 @@ from .templates import default_tasks_for_industry
 
 logger = configure_logging()
 docs_enabled = not settings.restricted_environment
-app = FastAPI(title="Ready Set Solutions ComplianceBinder", version="0.3.0", docs_url="/docs" if docs_enabled else None, redoc_url="/redoc" if docs_enabled else None, openapi_url="/openapi.json" if docs_enabled else None)
-app.add_middleware(CORSMiddleware, allow_origins=settings.parsed_allowed_origins(), allow_credentials=False, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
+app = FastAPI(
+    title="Ready Set Solutions ComplianceBinder",
+    version="0.3.0",
+    docs_url="/docs" if docs_enabled else None,
+    redoc_url="/redoc" if docs_enabled else None,
+    openapi_url="/openapi.json" if docs_enabled else None,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.parsed_allowed_origins(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
@@ -66,16 +78,29 @@ def _validate_upload_metadata(file: UploadFile) -> str:
     if content_type not in settings.parsed_allowed_content_types():
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Unsupported file type")
     extension = Path(file.filename or "").suffix.lower()
-    expected_extensions = {"application/pdf": {".pdf"}, "image/png": {".png"}, "image/jpeg": {".jpg", ".jpeg"}}
+    expected_extensions = {
+        "application/pdf": {".pdf"},
+        "image/png": {".png"},
+        "image/jpeg": {".jpg", ".jpeg"},
+    }
     if extension not in expected_extensions.get(content_type, set()):
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="File extension does not match the declared type")
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="File extension does not match the declared type",
+        )
     return content_type
 
 
 def _save_upload_with_limit(file: UploadFile, destination: Path) -> int:
     total = 0
     try:
-        with destination.open("xb") as out_file:
+        out_file = destination.open("xb")
+    except FileExistsError:
+        # A collision belongs to a different/pre-existing file. Never unlink it.
+        raise
+
+    try:
+        with out_file:
             os.chmod(destination, 0o600)
             while True:
                 chunk = file.file.read(1024 * 1024)
@@ -83,11 +108,15 @@ def _save_upload_with_limit(file: UploadFile, destination: Path) -> int:
                     break
                 total += len(chunk)
                 if total > settings.max_upload_size_bytes:
-                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Upload exceeds the configured file-size limit")
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="Upload exceeds the configured file-size limit",
+                    )
                 out_file.write(chunk)
     except Exception:
         destination.unlink(missing_ok=True)
         raise
+
     if total == 0:
         destination.unlink(missing_ok=True)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty uploads are not allowed")
@@ -109,7 +138,10 @@ def _sniff_content_type(path: Path) -> str:
 def _validate_saved_upload(path: Path, declared_type: str) -> None:
     if _sniff_content_type(path) != declared_type:
         path.unlink(missing_ok=True)
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="File contents do not match the declared type")
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="File contents do not match the declared type",
+        )
 
 
 def _storage_extension(content_type: str) -> str:
@@ -120,7 +152,14 @@ def _has_paid_access(user: User) -> bool:
     return user.billing_status in {"active", "trialing"}
 
 
-def _apply_billing_update(session: Session, user: User, plan: str, billing_status: str, stripe_customer_id: str = "", stripe_subscription_id: str = "") -> None:
+def _apply_billing_update(
+    session: Session,
+    user: User,
+    plan: str,
+    billing_status: str,
+    stripe_customer_id: str = "",
+    stripe_subscription_id: str = "",
+) -> None:
     user.billing_plan = plan or user.billing_plan or "free"
     user.billing_status = billing_status or user.billing_status or "inactive"
     if stripe_customer_id:
@@ -172,7 +211,9 @@ def register(user_in: UserCreate, request: Request, session: Session = Depends(g
     normalized_email = str(user_in.email).strip().lower()
     existing = session.exec(select(User).where(User.email == normalized_email)).first()
     if existing:
-        log_auth_event("register", normalized_email, success=True, details="generic response")
+        # Keep the HTTP response generic to avoid account enumeration, but make
+        # the audit record accurate: no account was created.
+        log_auth_event("register", normalized_email, success=False, details="duplicate registration request")
         return {"ok": True}
     user = User(email=normalized_email, password_hash=hash_password(user_in.password))
     session.add(user)
@@ -182,7 +223,11 @@ def register(user_in: UserCreate, request: Request, session: Session = Depends(g
 
 
 @app.post("/auth/token", response_model=Token)
-def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)) -> Token:
+def login(
+    request: Request,
+    form: OAuth2PasswordRequestForm = Depends(),
+    session: Session = Depends(get_session),
+) -> Token:
     auth_rate_limiter.check(request, "login")
     normalized_email = form.username.strip().lower()
     user = session.exec(select(User).where(User.email == normalized_email)).first()
@@ -196,7 +241,11 @@ def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), session
 
 @app.get("/billing/plans")
 def billing_plans() -> dict:
-    return {"starter": {"label": "Starter", "price": "$19 / month", "mode": "subscription"}, "pro": {"label": "Pro", "price": "$49 / month", "mode": "subscription"}, "setup": {"label": "Ready Set Pilot", "price": "$299 one-time", "mode": "payment"}}
+    return {
+        "starter": {"label": "Starter", "price": "$19 / month", "mode": "subscription"},
+        "pro": {"label": "Pro", "price": "$49 / month", "mode": "subscription"},
+        "setup": {"label": "Ready Set Pilot", "price": "$299 one-time", "mode": "payment"},
+    }
 
 
 @app.get("/billing/status", response_model=BillingStatusResponse)
@@ -208,14 +257,28 @@ def billing_status(me: User = Depends(get_current_user)) -> BillingStatusRespons
 def create_checkout_session(payload: CheckoutRequest, me: User = Depends(get_current_user)) -> CheckoutResponse:
     if not settings.stripe_secret_key:
         raise HTTPException(status_code=503, detail="Stripe is not configured")
-    price_map = {"starter": (settings.stripe_price_starter, "subscription"), "pro": (settings.stripe_price_pro, "subscription"), "setup": (settings.stripe_price_setup, "payment")}
+    price_map = {
+        "starter": (settings.stripe_price_starter, "subscription"),
+        "pro": (settings.stripe_price_pro, "subscription"),
+        "setup": (settings.stripe_price_setup, "payment"),
+    }
     plan = payload.plan.strip().lower()
     price_id, mode = price_map.get(plan, ("", ""))
     if not price_id:
         raise HTTPException(status_code=400, detail="Invalid or unconfigured billing plan")
+
     import stripe
+
     stripe.api_key = settings.stripe_secret_key
-    checkout = stripe.checkout.Session.create(mode=mode, line_items=[{"price": price_id, "quantity": 1}], customer_email=me.email, client_reference_id=str(me.id), success_url=f"{settings.public_app_url.rstrip('/')}/?payment=success", cancel_url=f"{settings.public_app_url.rstrip('/')}/?payment=cancelled", metadata={"user_id": str(me.id), "plan": plan})
+    checkout = stripe.checkout.Session.create(
+        mode=mode,
+        line_items=[{"price": price_id, "quantity": 1}],
+        customer_email=me.email,
+        client_reference_id=str(me.id),
+        success_url=f"{settings.public_app_url.rstrip('/')}/?payment=success",
+        cancel_url=f"{settings.public_app_url.rstrip('/')}/?payment=cancelled",
+        metadata={"user_id": str(me.id), "plan": plan},
+    )
     if not checkout.url:
         raise HTTPException(status_code=502, detail="Stripe checkout URL was not returned")
     return CheckoutResponse(url=checkout.url)
@@ -225,40 +288,73 @@ def create_checkout_session(payload: CheckoutRequest, me: User = Depends(get_cur
 async def stripe_webhook(request: Request, session: Session = Depends(get_session)) -> dict:
     if not settings.stripe_secret_key or not settings.stripe_webhook_secret:
         raise HTTPException(status_code=503, detail="Stripe webhook is not configured")
+
     import stripe
+
     payload = await request.body()
     signature = request.headers.get("stripe-signature", "")
     try:
         event = stripe.Webhook.construct_event(payload, signature, settings.stripe_webhook_secret)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid Stripe webhook payload") from exc
+
     event_type = event.get("type")
     obj = event.get("data", {}).get("object", {})
     metadata = obj.get("metadata", {}) or {}
     allowed_plans = {"starter", "pro", "setup"}
+
     if event_type in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
         user = _user_from_checkout_metadata(session, metadata)
         plan = metadata.get("plan", "")
         paid = event_type == "checkout.session.async_payment_succeeded" or obj.get("payment_status") == "paid"
         if user and plan in allowed_plans and paid:
-            _apply_billing_update(session, user, plan=plan, billing_status="active", stripe_customer_id=obj.get("customer") or "", stripe_subscription_id=obj.get("subscription") or "")
+            _apply_billing_update(
+                session,
+                user,
+                plan=plan,
+                billing_status="active",
+                stripe_customer_id=obj.get("customer") or "",
+                stripe_subscription_id=obj.get("subscription") or "",
+            )
     elif event_type == "checkout.session.async_payment_failed":
-        user = _user_from_checkout_metadata(session, metadata)
-        if user:
-            _apply_billing_update(session, user, plan=user.billing_plan, billing_status="inactive")
+        # A failed additional checkout must never revoke a separate entitlement
+        # that is already active or trialing. Inactive users are already inactive,
+        # so no state mutation is needed here.
+        logger.warning("Stripe asynchronous checkout payment failed; existing entitlement preserved")
     elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
         customer_id = obj.get("customer") or ""
         user = session.exec(select(User).where(User.stripe_customer_id == customer_id)).first() if customer_id else None
         if user:
             if event_type == "customer.subscription.deleted":
-                _apply_billing_update(session, user, plan="free", billing_status="canceled", stripe_customer_id=customer_id, stripe_subscription_id=obj.get("id") or user.stripe_subscription_id)
+                _apply_billing_update(
+                    session,
+                    user,
+                    plan="free",
+                    billing_status="canceled",
+                    stripe_customer_id=customer_id,
+                    stripe_subscription_id=obj.get("id") or user.stripe_subscription_id,
+                )
             else:
-                _apply_billing_update(session, user, plan=user.billing_plan, billing_status=obj.get("status") or "inactive", stripe_customer_id=customer_id, stripe_subscription_id=obj.get("id") or user.stripe_subscription_id)
+                _apply_billing_update(
+                    session,
+                    user,
+                    plan=user.billing_plan,
+                    billing_status=obj.get("status") or "inactive",
+                    stripe_customer_id=customer_id,
+                    stripe_subscription_id=obj.get("id") or user.stripe_subscription_id,
+                )
     elif event_type == "invoice.payment_failed":
         customer_id = obj.get("customer") or ""
         user = session.exec(select(User).where(User.stripe_customer_id == customer_id)).first() if customer_id else None
         if user:
-            _apply_billing_update(session, user, plan=user.billing_plan, billing_status="past_due", stripe_customer_id=customer_id, stripe_subscription_id=user.stripe_subscription_id)
+            _apply_billing_update(
+                session,
+                user,
+                plan=user.billing_plan,
+                billing_status="past_due",
+                stripe_customer_id=customer_id,
+                stripe_subscription_id=user.stripe_subscription_id,
+            )
     return {"received": True}
 
 
@@ -269,7 +365,11 @@ def list_binders(me: User = Depends(get_current_user), session: Session = Depend
 
 
 @app.post("/binders", response_model=BinderOut, status_code=201)
-def create_binder(binder_in: BinderCreate, me: User = Depends(get_current_user), session: Session = Depends(get_session)) -> BinderOut:
+def create_binder(
+    binder_in: BinderCreate,
+    me: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> BinderOut:
     binder = Binder(name=binder_in.name.strip(), industry=binder_in.industry.strip(), owner_id=me.id)
     session.add(binder)
     session.commit()
@@ -290,26 +390,62 @@ def _get_binder_or_404(binder_id: int, me: User, session: Session) -> Binder:
 
 
 @app.get("/binders/{binder_id}/tasks", response_model=list[TaskOut])
-def list_tasks(binder_id: int, me: User = Depends(get_current_user), session: Session = Depends(get_session)) -> list[TaskOut]:
+def list_tasks(
+    binder_id: int,
+    me: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> list[TaskOut]:
     _get_binder_or_404(binder_id, me, session)
     tasks = session.exec(select(Task).where(Task.binder_id == binder_id).order_by(Task.created_at.desc())).all()
     today = date.today()
-    return [TaskOut(id=t.id, title=t.title, description=t.description, status=t.status, due_date=t.due_date, created_at=t.created_at, is_overdue=t.status != "done" and t.due_date is not None and t.due_date < today) for t in tasks]
+    return [
+        TaskOut(
+            id=t.id,
+            title=t.title,
+            description=t.description,
+            status=t.status,
+            due_date=t.due_date,
+            created_at=t.created_at,
+            is_overdue=t.status != "done" and t.due_date is not None and t.due_date < today,
+        )
+        for t in tasks
+    ]
 
 
 @app.post("/binders/{binder_id}/tasks", response_model=TaskOut, status_code=201)
-def create_task(binder_id: int, task_in: TaskCreate, me: User = Depends(get_current_user), session: Session = Depends(get_session)) -> TaskOut:
+def create_task(
+    binder_id: int,
+    task_in: TaskCreate,
+    me: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> TaskOut:
     _get_binder_or_404(binder_id, me, session)
-    task = Task(title=task_in.title.strip(), description=task_in.description.strip(), due_date=task_in.due_date, binder_id=binder_id)
+    task = Task(
+        title=task_in.title.strip(),
+        description=task_in.description.strip(),
+        due_date=task_in.due_date,
+        binder_id=binder_id,
+    )
     session.add(task)
     session.commit()
     session.refresh(task)
     log_crud_event("create", "task", task.id, me.email)
-    return TaskOut(id=task.id, title=task.title, description=task.description, status=task.status, due_date=task.due_date, created_at=task.created_at)
+    return TaskOut(
+        id=task.id,
+        title=task.title,
+        description=task.description,
+        status=task.status,
+        due_date=task.due_date,
+        created_at=task.created_at,
+    )
 
 
 @app.post("/tasks/{task_id}/done")
-def mark_done(task_id: int, me: User = Depends(get_current_user), session: Session = Depends(get_session)) -> dict:
+def mark_done(
+    task_id: int,
+    me: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> dict:
     task = session.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -325,31 +461,78 @@ def mark_done(task_id: int, me: User = Depends(get_current_user), session: Sessi
 
 
 @app.get("/binders/{binder_id}/documents", response_model=list[DocumentOut])
-def list_documents(binder_id: int, me: User = Depends(get_current_user), session: Session = Depends(get_session)) -> list[DocumentOut]:
+def list_documents(
+    binder_id: int,
+    me: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> list[DocumentOut]:
     _get_binder_or_404(binder_id, me, session)
     docs = session.exec(select(Document).where(Document.binder_id == binder_id).order_by(Document.uploaded_at.desc())).all()
-    return [DocumentOut(id=d.id, original_name=d.original_name, content_type=d.content_type, note=d.note, uploaded_at=d.uploaded_at) for d in docs]
+    return [
+        DocumentOut(
+            id=d.id,
+            original_name=d.original_name,
+            content_type=d.content_type,
+            note=d.note,
+            uploaded_at=d.uploaded_at,
+        )
+        for d in docs
+    ]
 
 
 @app.post("/binders/{binder_id}/documents", status_code=201)
-def upload_document(binder_id: int, file: UploadFile = File(...), note: str = Form(""), me: User = Depends(get_current_user), session: Session = Depends(get_session)) -> dict:
+def upload_document(
+    binder_id: int,
+    file: UploadFile = File(...),
+    note: str = Form(""),
+    me: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+) -> dict:
     _get_binder_or_404(binder_id, me, session)
     content_type = _validate_upload_metadata(file)
     original_name = _safe_original_filename(file.filename)
-    safe_name = f"{secrets.token_hex(24)}{_storage_extension(content_type)}"
-    dest = Path(settings.upload_dir) / safe_name
-    bytes_written = _save_upload_with_limit(file, dest)
+
+    dest: Path | None = None
+    bytes_written = 0
+    for _ in range(3):
+        safe_name = f"{secrets.token_hex(24)}{_storage_extension(content_type)}"
+        candidate = Path(settings.upload_dir) / safe_name
+        try:
+            bytes_written = _save_upload_with_limit(file, candidate)
+        except FileExistsError:
+            continue
+        dest = candidate
+        break
+    if dest is None:
+        raise HTTPException(status_code=503, detail="Could not allocate secure upload storage")
+
     _validate_saved_upload(dest, content_type)
-    doc = Document(filename=safe_name, original_name=original_name, content_type=content_type, note=note.strip()[:500], binder_id=binder_id)
-    session.add(doc)
-    session.commit()
-    session.refresh(doc)
+    doc = Document(
+        filename=dest.name,
+        original_name=original_name,
+        content_type=content_type,
+        note=note.strip()[:500],
+        binder_id=binder_id,
+    )
+    try:
+        session.add(doc)
+        session.commit()
+        session.refresh(doc)
+    except Exception:
+        session.rollback()
+        dest.unlink(missing_ok=True)
+        raise
+
     log_crud_event("create", "document", doc.id, me.email, f"bytes={bytes_written}")
     return {"ok": True, "id": doc.id, "bytes": bytes_written}
 
 
 @app.get("/documents/{doc_id}/download")
-def download_document(doc_id: int, me: User = Depends(get_current_user), session: Session = Depends(get_session)):
+def download_document(
+    doc_id: int,
+    me: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
     doc = session.get(Document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Doc not found")
@@ -359,25 +542,44 @@ def download_document(doc_id: int, me: User = Depends(get_current_user), session
     path = Path(settings.upload_dir) / doc.filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="File missing on server")
-    return FileResponse(path, media_type=doc.content_type, filename=doc.original_name, headers={"Cache-Control": "no-store"})
+    return FileResponse(
+        path,
+        media_type=doc.content_type,
+        filename=doc.original_name,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def _render_binder_report_html(binder: Binder, tasks: list[Task], docs: list[Document]) -> str:
     open_tasks = [t for t in tasks if t.status != "done"]
     done_tasks = [t for t in tasks if t.status == "done"]
-    report_html = ["<html><head><meta charset='utf-8'><title>Readiness Report</title>", "<style>body{font-family:Arial;margin:24px}h1{margin-bottom:0}.meta{color:#555}table{width:100%;border-collapse:collapse;margin-top:12px}td,th{border:1px solid #ddd;padding:8px}th{background:#f5f5f5}</style>", "</head><body>", f"<h1>{_escape(binder.name)}</h1>", f"<div class='meta'>Industry: {_escape(binder.industry)} &bull; Generated: {date.today().isoformat()}</div>", "<h2>Open Tasks</h2>", "<table><tr><th>Task</th><th>Due</th><th>Description</th></tr>"]
+    report_html = [
+        "<html><head><meta charset='utf-8'><title>Readiness Report</title>",
+        "<style>body{font-family:Arial;margin:24px}h1{margin-bottom:0}.meta{color:#555}table{width:100%;border-collapse:collapse;margin-top:12px}td,th{border:1px solid #ddd;padding:8px}th{background:#f5f5f5}</style>",
+        "</head><body>",
+        f"<h1>{_escape(binder.name)}</h1>",
+        f"<div class='meta'>Industry: {_escape(binder.industry)} &bull; Generated: {date.today().isoformat()}</div>",
+        "<h2>Open Tasks</h2>",
+        "<table><tr><th>Task</th><th>Due</th><th>Description</th></tr>",
+    ]
     for task in sorted(open_tasks, key=lambda item: item.due_date or date.max):
-        report_html.append(f"<tr><td>{_escape(task.title)}</td><td>{_escape(task.due_date or '')}</td><td>{_escape(task.description)}</td></tr>")
+        report_html.append(
+            f"<tr><td>{_escape(task.title)}</td><td>{_escape(task.due_date or '')}</td><td>{_escape(task.description)}</td></tr>"
+        )
     report_html.append("</table>")
     report_html.append("<h2>Completed Tasks</h2>")
     report_html.append("<table><tr><th>Task</th><th>Due</th><th>Description</th></tr>")
     for task in sorted(done_tasks, key=lambda item: item.due_date or date.max):
-        report_html.append(f"<tr><td>{_escape(task.title)}</td><td>{_escape(task.due_date or '')}</td><td>{_escape(task.description)}</td></tr>")
+        report_html.append(
+            f"<tr><td>{_escape(task.title)}</td><td>{_escape(task.due_date or '')}</td><td>{_escape(task.description)}</td></tr>"
+        )
     report_html.append("</table>")
     report_html.append("<h2>Documents</h2>")
     report_html.append("<table><tr><th>Name</th><th>Note</th><th>Uploaded</th></tr>")
     for doc in sorted(docs, key=lambda item: item.uploaded_at, reverse=True):
-        report_html.append(f"<tr><td>{_escape(doc.original_name)}</td><td>{_escape(doc.note)}</td><td>{doc.uploaded_at:%Y-%m-%d}</td></tr>")
+        report_html.append(
+            f"<tr><td>{_escape(doc.original_name)}</td><td>{_escape(doc.note)}</td><td>{doc.uploaded_at:%Y-%m-%d}</td></tr>"
+        )
     report_html.append("</table>")
     report_html.append("</body></html>")
     return "\n".join(report_html)
@@ -387,11 +589,13 @@ def _build_report_pdf(binder: Binder, tasks: list[Task], docs: list[Document]) -
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.units import inch
     from reportlab.pdfgen import canvas
+
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=letter)
     _, height = letter
     left = 0.75 * inch
     y = height - 0.75 * inch
+
     def line(text: str, size: int = 10, gap: int = 14) -> None:
         nonlocal y
         safe_text = str(text).replace("\r", " ").replace("\n", " ")
@@ -401,6 +605,7 @@ def _build_report_pdf(binder: Binder, tasks: list[Task], docs: list[Document]) -
         pdf.setFont("Helvetica", size)
         pdf.drawString(left, y, safe_text[:110])
         y -= gap
+
     line(str(binder.name), 16, 22)
     line(f"Industry: {binder.industry} | Generated: {date.today().isoformat()}", 10, 20)
     line("Open Tasks", 13, 18)
@@ -426,15 +631,26 @@ def _build_report_pdf(binder: Binder, tasks: list[Task], docs: list[Document]) -
 
 
 @app.get("/binders/{binder_id}/report")
-def binder_report(binder_id: int, me: User = Depends(get_current_user), session: Session = Depends(get_session)):
+def binder_report(
+    binder_id: int,
+    me: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
     binder = _get_binder_or_404(binder_id, me, session)
     tasks = session.exec(select(Task).where(Task.binder_id == binder_id)).all()
     docs = session.exec(select(Document).where(Document.binder_id == binder_id)).all()
-    return HTMLResponse(_render_binder_report_html(binder, tasks, docs), headers={"Cache-Control": "no-store"})
+    return HTMLResponse(
+        _render_binder_report_html(binder, tasks, docs),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/binders/{binder_id}/report.pdf")
-def binder_report_pdf(binder_id: int, me: User = Depends(get_current_user), session: Session = Depends(get_session)):
+def binder_report_pdf(
+    binder_id: int,
+    me: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
     if not _has_paid_access(me):
         raise HTTPException(status_code=402, detail="PDF export requires an active paid plan")
     binder = _get_binder_or_404(binder_id, me, session)
@@ -442,7 +658,14 @@ def binder_report_pdf(binder_id: int, me: User = Depends(get_current_user), sess
     docs = session.exec(select(Document).where(Document.binder_id == binder_id)).all()
     pdf_bytes = _build_report_pdf(binder, tasks, docs)
     filename = f"readiness-report-{binder_id}.pdf"
-    return StreamingResponse(BytesIO(pdf_bytes), media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={filename}", "Cache-Control": "no-store"})
+    return StreamingResponse(
+        BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 static_dir = Path(__file__).parent / "static"
